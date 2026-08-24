@@ -4,50 +4,84 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>NEEGY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-  <header class="header">
-    <h1 id="page-title">Nos services</h1>
-    <p class="subtitle" id="page-subtitle">Choisis ce qu'il te faut, ajoute-le au panier.</p>
-  </header>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="app">
+    <header class="header">
+      <p class="brand">Maison Neegy</p>
+      <h1 id="page-title">Boutique</h1>
+      <p class="subtitle" id="page-subtitle">Choisis ton booster. Chaque pack a sa rareté.</p>
+    </header>
 
-  <main id="view-shop" class="view" aria-live="polite">
-    <section>
-      <h2 class="section-title">📸 Photos</h2>
-      <div id="photo-list" class="product-list">
-        <p class="loading">Chargement…</p>
+    <div id="cart-strip" class="cart-strip" hidden></div>
+
+    <main id="view-shop" class="view" aria-live="polite">
+      <section class="section">
+        <div class="section-head">
+          <h2>Boosters</h2>
+          <span class="section-note" id="photo-note"></span>
+        </div>
+        <div id="photo-list" class="booster-rack">
+          <div class="skeleton"></div>
+          <div class="skeleton"></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Énergies</h2>
+          <span class="section-note">appels à distance</span>
+        </div>
+        <div id="call-list" class="booster-rack">
+          <div class="skeleton"></div>
+        </div>
+      </section>
+    </main>
+
+    <main id="view-wheel" class="view" hidden>
+      <div class="wheel-stage">
+        <div class="wheel-ring">
+          <div class="wheel-pointer"></div>
+          <div class="wheel" id="wheel-graphic"></div>
+          <div class="wheel-hub">N</div>
+        </div>
       </div>
-    </section>
-    <section>
-      <h2 class="section-title">📞 Appels</h2>
-      <div id="call-list" class="product-list">
-        <p class="loading">Chargement…</p>
+      <div class="wheel-panel">
+        <p class="wheel-kicker">Invitation du jour</p>
+        <p id="wheel-status-text" class="wheel-status">Chargement…</p>
+        <button id="wheel-spin-btn" class="btn btn-gold btn-lg" disabled>Tourner la roue</button>
       </div>
-    </section>
-  </main>
+    </main>
 
-  <main id="view-wheel" class="view" hidden>
-    <div class="wheel-card">
-      <p class="wheel-emoji">🎡</p>
-      <p id="wheel-status-text" class="wheel-status">Chargement…</p>
-      <button id="wheel-spin-btn" class="spin-btn" disabled>Tourner la roue</button>
-    </div>
-  </main>
+    <main id="view-vip" class="view" hidden>
+      <div id="vip-content">
+        <div class="skeleton" style="height: 220px"></div>
+      </div>
+    </main>
+  </div>
 
-  <main id="view-vip" class="view" hidden>
-    <div id="vip-content">
-      <p class="loading">Chargement…</p>
-    </div>
-  </main>
-
-  <p id="error-banner" class="error-banner" hidden></p>
+  <p id="toast" class="toast" hidden></p>
 
   <nav class="tab-bar">
-    <button class="tab-btn" data-tab="shop">🛍️<span>Boutique</span></button>
-    <button class="tab-btn" data-tab="wheel">🎡<span>Roue</span></button>
-    <button class="tab-btn" data-tab="vip">⭐<span>VIP</span></button>
+    <button class="tab-btn" data-tab="shop">
+      <span class="tab-icon">◆</span>
+      <span class="tab-label">Boutique</span>
+      <span id="shop-badge" class="tab-badge" hidden></span>
+    </button>
+    <button class="tab-btn" data-tab="wheel">
+      <span class="tab-icon">◎</span>
+      <span class="tab-label">Roue</span>
+    </button>
+    <button class="tab-btn" data-tab="vip">
+      <span class="tab-icon">♔</span>
+      <span class="tab-label">Cercle</span>
+    </button>
   </nav>
 
   <script src="app.js"></script>

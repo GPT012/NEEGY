@@ -6,22 +6,38 @@
   const pageTitleEl = document.getElementById("page-title");
   const pageSubtitleEl = document.getElementById("page-subtitle");
   const photoListEl = document.getElementById("photo-list");
+  const photoNoteEl = document.getElementById("photo-note");
   const callListEl = document.getElementById("call-list");
-  const errorBannerEl = document.getElementById("error-banner");
+  const toastEl = document.getElementById("toast");
+  const cartStripEl = document.getElementById("cart-strip");
+  const shopBadgeEl = document.getElementById("shop-badge");
   const wheelStatusEl = document.getElementById("wheel-status-text");
   const wheelSpinBtn = document.getElementById("wheel-spin-btn");
+  const wheelGraphicEl = document.getElementById("wheel-graphic");
   const vipContentEl = document.getElementById("vip-content");
   const tabButtons = document.querySelectorAll(".tab-btn");
+
   const views = {
     shop: document.getElementById("view-shop"),
     wheel: document.getElementById("view-wheel"),
     vip: document.getElementById("view-vip"),
   };
   const pageMeta = {
-    shop: { title: "Nos services", subtitle: "Choisis ce qu'il te faut, ajoute-le au panier." },
-    wheel: { title: "Roue quotidienne", subtitle: "Un tour gratuit par jour, tente ta chance !" },
-    vip: { title: "Abonnement VIP", subtitle: "Accès exclusif et avantages chaque jour." },
+    shop: { title: "Le deck", subtitle: "Choisis ton booster. Chaque pack a sa rareté." },
+    wheel: { title: "Le rituel", subtitle: "Un geste chaque jour. Un cadeau, parfois." },
+    vip: { title: "Le cercle", subtitle: "L'accès discret, sans ostentation." },
   };
+  const BOOSTER_TIERS = [
+    { rarity: "COMMON", energy: "feuille", cards: "3 cartes" },
+    { rarity: "UNCOMMON", energy: "vague", cards: "8 cartes" },
+    { rarity: "RARE", energy: "éclair", cards: "secret" },
+  ];
+  const CALL_TIERS = {
+    15: { rarity: "FIRE", energy: "feu" },
+    30: { rarity: "PSY", energy: "esprit" },
+  };
+
+  const SPIN_DURATION_MS = 3400;
 
   /** @type {Array<object>} */
   let photos = [];
@@ -35,6 +51,12 @@
   const slotCache = new Map();
   /** @type {Set<number>} product_id dont le sélecteur de créneau est ouvert */
   const openSlotPickers = new Set();
+  let wheelRotation = 0;
+  let toastTimer = null;
+
+  // ------------------------------------------------------------------
+  // Utilitaires
+  // ------------------------------------------------------------------
 
   function initDataHeader() {
     return tg?.initData || "";
@@ -58,24 +80,44 @@
 
   function formatPrice(cents, currency) {
     const symbol = currency === "EUR" ? "€" : currency;
-    return `${(cents / 100).toFixed(2)} ${symbol}`;
+    const amount = cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
+    return `${amount} ${symbol}`;
   }
 
+  // Les créneaux sont affichés en UTC pour rester cohérents avec les
+  // récapitulatifs envoyés dans le chat par le bot.
   function formatDateTime(isoString) {
     const date = new Date(isoString);
-    return (
-      date.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" }) +
-      " à " +
-      date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) +
-      " UTC"
-    );
+    const day = date.toLocaleDateString("fr-FR", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "UTC",
+    });
+    const time = date.toLocaleTimeString("fr-FR", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+    });
+    return `${day} · ${time} UTC`;
   }
 
-  function showError(message) {
-    errorBannerEl.textContent = message;
-    errorBannerEl.hidden = false;
-    setTimeout(() => {
-      errorBannerEl.hidden = true;
+  function formatDate(isoString) {
+    return new Date(isoString).toLocaleDateString("fr-FR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  }
+
+  function showToast(message, variant) {
+    toastEl.textContent = message;
+    toastEl.className = variant === "success" ? "toast toast-success" : "toast";
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastEl.hidden = true;
     }, 4000);
   }
 
@@ -83,6 +125,53 @@
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  function renderEmpty(container, icon, message) {
+    container.innerHTML = `<div class="empty"><span class="empty-icon">${icon}</span>${escapeHtml(message)}</div>`;
+  }
+
+  function applyTheme() {
+    const scheme = tg?.colorScheme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", scheme);
+    try {
+      tg?.setHeaderColor?.(scheme === "dark" ? "#12110f" : "#f7f4ee");
+      tg?.setBackgroundColor?.(scheme === "dark" ? "#12110f" : "#f7f4ee");
+    } catch (err) {
+      // Clients Telegram antérieurs à Bot API 6.1.
+    }
+  }
+
+  function cartItemCount() {
+    let count = 0;
+    for (const entry of cartByProduct.values()) {
+      count += entry.quantity;
+    }
+    return count;
+  }
+
+  function updateCartChrome() {
+    const count = cartItemCount();
+    if (shopBadgeEl) {
+      shopBadgeEl.hidden = count === 0;
+      shopBadgeEl.textContent = String(count);
+    }
+    if (!cartStripEl) return;
+    if (count === 0 || views.shop.hidden) {
+      cartStripEl.hidden = true;
+      return;
+    }
+    cartStripEl.hidden = false;
+    cartStripEl.innerHTML = `
+      <span><strong>${count}</strong> ${count > 1 ? "pièces" : "pièce"}</span>
+      <span class="cart-strip-meta">${formatPrice(cartTotalCents, cartCurrency)}</span>
+    `;
+  }
+
+  function stagger(elements) {
+    elements.forEach((el, index) => {
+      el.style.animationDelay = `${Math.min(index, 6) * 55}ms`;
+    });
   }
 
   // ------------------------------------------------------------------
@@ -98,18 +187,23 @@
     }
     pageTitleEl.textContent = pageMeta[tab].title;
     pageSubtitleEl.textContent = pageMeta[tab].subtitle;
+    window.scrollTo({ top: 0, behavior: "smooth" });
 
     if (tab === "wheel") refreshWheelStatus();
     if (tab === "vip") refreshVipStatus();
-    if (tab === "shop") updateMainButton();
+    updateCartChrome();
+    updateMainButton();
   }
 
   for (const btn of tabButtons) {
-    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+    btn.addEventListener("click", () => {
+      tg?.HapticFeedback?.selectionChanged?.();
+      switchTab(btn.dataset.tab);
+    });
   }
 
   // ------------------------------------------------------------------
-  // Boutique : photos + appels
+  // Boutique
   // ------------------------------------------------------------------
 
   async function fetchCatalog() {
@@ -141,35 +235,57 @@
   function renderShop() {
     renderPhotoList();
     renderCallList();
+    updateCartChrome();
     updateMainButton();
   }
 
   function renderPhotoList() {
     if (!photos.length) {
-      photoListEl.innerHTML = '<p class="loading">Aucune photo disponible pour le moment.</p>';
+      renderEmpty(photoListEl, "★", "Aucun booster en stock pour le moment.");
+      photoNoteEl.textContent = "";
       return;
     }
+    photoNoteEl.textContent = `${photos.length} boosters`;
     photoListEl.innerHTML = "";
-    for (const product of photos) {
-      photoListEl.appendChild(renderPhotoCard(product));
-    }
+    const featuredId = photos.reduce(
+      (best, product) => (product.price_cents > best.price_cents ? product : best),
+      photos[0]
+    ).id;
+    photos.forEach((product, index) => {
+      photoListEl.appendChild(renderPhotoCard(product, index, product.id === featuredId));
+    });
+    stagger([...photoListEl.children]);
   }
 
-  function renderPhotoCard(product) {
+  function renderPhotoCard(product, index, featured) {
     const entry = cartByProduct.get(product.id);
     const quantity = entry?.quantity || 0;
+    const tier = BOOSTER_TIERS[Math.min(index, BOOSTER_TIERS.length - 1)];
+    const rarityClass = `booster-${tier.rarity.toLowerCase()}`;
 
-    const card = document.createElement("div");
-    card.className = "product-card";
-
-    const info = document.createElement("div");
-    info.className = "product-info";
-    info.innerHTML = `
-      <p class="product-name">${escapeHtml(product.name)}</p>
-      <p class="product-description">${escapeHtml(product.description)}</p>
-      <p class="product-price">${formatPrice(product.price_cents, product.currency)}</p>
+    const pack = document.createElement("article");
+    pack.className = `booster ${rarityClass}${featured ? " booster-featured" : ""}${quantity ? " in-cart" : ""}`;
+    pack.innerHTML = `
+      <div class="booster-shine" aria-hidden="true"></div>
+      <div class="booster-stars" aria-hidden="true"></div>
+      <header class="booster-header">
+        <span class="booster-set">NEEGY · SET 01</span>
+        <span class="booster-rarity">${tier.rarity}</span>
+      </header>
+      <div class="booster-window">
+        <span class="booster-energy" aria-hidden="true"></span>
+        <p class="booster-title">${escapeHtml(product.name)}</p>
+        <p class="booster-cards">${escapeHtml(tier.cards)}</p>
+      </div>
+      <p class="booster-banner">BOOSTER PACK</p>
+      <p class="booster-desc">${escapeHtml(product.description)}</p>
+      <footer class="booster-foot"></footer>
     `;
-    card.appendChild(info);
+
+    const foot = pack.querySelector(".booster-foot");
+    const price = document.createElement("span");
+    price.className = "booster-price";
+    price.textContent = formatPrice(product.price_cents, product.currency);
 
     if (quantity > 0) {
       const control = document.createElement("div");
@@ -177,8 +293,12 @@
 
       const minusBtn = document.createElement("button");
       minusBtn.className = "qty-btn";
+      minusBtn.setAttribute("aria-label", "Retirer un exemplaire");
       minusBtn.textContent = "−";
-      minusBtn.addEventListener("click", () => changeQuantity(product.id, quantity - 1));
+      minusBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        changeQuantity(product.id, quantity - 1);
+      });
 
       const value = document.createElement("span");
       value.className = "qty-value";
@@ -186,75 +306,108 @@
 
       const plusBtn = document.createElement("button");
       plusBtn.className = "qty-btn";
+      plusBtn.setAttribute("aria-label", "Ajouter un exemplaire");
       plusBtn.textContent = "+";
-      plusBtn.addEventListener("click", () => changeQuantity(product.id, quantity + 1));
+      plusBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        changeQuantity(product.id, quantity + 1);
+      });
 
       control.append(minusBtn, value, plusBtn);
-      card.appendChild(control);
+      foot.append(price, control);
     } else {
       const addBtn = document.createElement("button");
-      addBtn.className = "add-btn";
-      addBtn.textContent = "Ajouter";
-      addBtn.addEventListener("click", () => changeQuantity(product.id, 1));
-      card.appendChild(addBtn);
+      addBtn.className = "btn btn-gold booster-add";
+      addBtn.textContent = "Ouvrir";
+      addBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        changeQuantity(product.id, 1);
+      });
+      foot.append(price, addBtn);
     }
 
-    return card;
+    return pack;
   }
 
   function renderCallList() {
     if (!calls.length) {
-      callListEl.innerHTML = '<p class="loading">Aucun appel disponible pour le moment.</p>';
+      renderEmpty(callListEl, "○", "Aucun créneau n'est ouvert pour l'instant.");
       return;
     }
     callListEl.innerHTML = "";
     for (const product of calls) {
       callListEl.appendChild(renderCallCard(product));
     }
+    stagger([...callListEl.children]);
   }
 
   function renderCallCard(product) {
     const entry = cartByProduct.get(product.id);
+    const duration = product.duration_minutes || 15;
+    const tier = CALL_TIERS[duration] || { rarity: "FIRE", energy: "feu" };
+    const rarityClass = `booster-${tier.rarity.toLowerCase()}`;
 
-    const card = document.createElement("div");
-    card.className = "product-card call-card";
+    const pack = document.createElement("article");
+    pack.className = `booster booster-call ${rarityClass}${entry?.call_slot_id ? " in-cart" : ""}`;
 
-    const info = document.createElement("div");
-    info.className = "product-info";
-    info.innerHTML = `
-      <p class="product-name">${escapeHtml(product.name)}</p>
-      <p class="product-description">${escapeHtml(product.description)}</p>
-      <p class="product-price">${formatPrice(product.price_cents, product.currency)} · ${product.duration_minutes} min</p>
+    const row = document.createElement("div");
+    row.className = "booster-inner";
+    row.innerHTML = `
+      <div class="booster-shine" aria-hidden="true"></div>
+      <div class="booster-stars" aria-hidden="true"></div>
+      <header class="booster-header">
+        <span class="booster-set">NEEGY · LIVE</span>
+        <span class="booster-rarity">${tier.rarity}</span>
+      </header>
+      <div class="booster-window">
+        <span class="booster-energy" aria-hidden="true"></span>
+        <p class="booster-title">${escapeHtml(product.name)}</p>
+        <p class="booster-cards">${duration} min</p>
+      </div>
+      <p class="booster-banner">ENERGY PACK</p>
+      <p class="booster-desc">${escapeHtml(product.description)}</p>
+      <footer class="booster-foot">
+        <span class="booster-price">${formatPrice(product.price_cents, product.currency)}</span>
+      </footer>
     `;
-    card.appendChild(info);
+    pack.appendChild(row);
+
+    const foot = row.querySelector(".booster-foot");
 
     if (entry?.call_slot_id) {
       const booked = document.createElement("div");
       booked.className = "slot-booked";
-      booked.innerHTML = `<span>✅ ${escapeHtml(formatDateTime(entry.call_slot_start_at))}</span>`;
+      booked.innerHTML = `
+        <span class="slot-booked-label">
+          <small>Créneau réservé</small>
+          ${escapeHtml(formatDateTime(entry.call_slot_start_at))}
+        </span>
+      `;
       const removeBtn = document.createElement("button");
-      removeBtn.className = "remove-btn";
+      removeBtn.className = "btn btn-danger";
       removeBtn.textContent = "Retirer";
       removeBtn.addEventListener("click", () => removeCartItem(product.id));
       booked.appendChild(removeBtn);
-      card.appendChild(booked);
-      return card;
+      pack.appendChild(booked);
+      return pack;
     }
 
+    const isOpen = openSlotPickers.has(product.id);
     const chooseBtn = document.createElement("button");
-    chooseBtn.className = "add-btn";
-    chooseBtn.textContent = openSlotPickers.has(product.id) ? "Masquer les créneaux" : "Choisir un créneau";
+    chooseBtn.className = isOpen ? "btn btn-ghost booster-add" : "btn btn-gold booster-add";
+    chooseBtn.textContent = isOpen ? "Masquer" : "Réserver";
     chooseBtn.addEventListener("click", () => toggleSlotPicker(product));
-    card.appendChild(chooseBtn);
+    foot.appendChild(chooseBtn);
 
-    if (openSlotPickers.has(product.id)) {
+    if (isOpen) {
       const picker = document.createElement("div");
       picker.className = "slot-picker";
       const cached = slotCache.get(product.id);
       if (!cached) {
-        picker.innerHTML = '<p class="loading">Chargement des créneaux…</p>';
+        picker.innerHTML = '<div class="skeleton" style="height: 38px; width: 100%"></div>';
       } else if (!cached.length) {
-        picker.innerHTML = '<p class="loading">Aucun créneau disponible pour le moment.</p>';
+        picker.innerHTML =
+          '<p class="section-note">Aucun créneau ouvert pour cette durée pour l\'instant.</p>';
       } else {
         for (const slot of cached) {
           const chip = document.createElement("button");
@@ -264,10 +417,10 @@
           picker.appendChild(chip);
         }
       }
-      card.appendChild(picker);
+      pack.appendChild(picker);
     }
 
-    return card;
+    return pack;
   }
 
   async function toggleSlotPicker(product) {
@@ -285,7 +438,7 @@
         slotCache.set(product.id, slots);
       } catch (err) {
         slotCache.set(product.id, []);
-        showError(err.message);
+        showToast(err.message);
       }
       renderCallList();
     }
@@ -301,9 +454,10 @@
       openSlotPickers.delete(product.id);
       slotCache.delete(product.id);
       renderShop();
-      tg?.HapticFeedback?.impactOccurred("light");
+      tg?.HapticFeedback?.notificationOccurred?.("success");
+      showToast(`Créneau retenu : ${formatDateTime(slot.start_at)}`, "success");
     } catch (err) {
-      showError(err.message);
+      showToast(err.message);
     }
   }
 
@@ -315,9 +469,9 @@
       });
       applyCart(cart);
       renderShop();
-      tg?.HapticFeedback?.impactOccurred("light");
+      tg?.HapticFeedback?.impactOccurred?.("light");
     } catch (err) {
-      showError(err.message);
+      showToast(err.message);
     }
   }
 
@@ -326,24 +480,20 @@
       const cart = await apiFetch(`/api/cart/${productId}`, { method: "DELETE" });
       applyCart(cart);
       renderShop();
-      tg?.HapticFeedback?.impactOccurred("light");
+      tg?.HapticFeedback?.impactOccurred?.("light");
     } catch (err) {
-      showError(err.message);
+      showToast(err.message);
     }
   }
 
   function updateMainButton() {
     if (!tg) return;
-    if (views.shop.hidden) {
+    if (views.shop.hidden || cartTotalCents <= 0) {
       tg.MainButton.hide();
       return;
     }
-    if (cartTotalCents > 0) {
-      tg.MainButton.setText(`Commander • ${formatPrice(cartTotalCents, cartCurrency)}`);
-      tg.MainButton.show();
-    } else {
-      tg.MainButton.hide();
-    }
+    tg.MainButton.setText(`Commander · ${formatPrice(cartTotalCents, cartCurrency)}`);
+    tg.MainButton.show();
   }
 
   async function handleCheckout() {
@@ -354,24 +504,23 @@
       cartByProduct = new Map();
       cartTotalCents = 0;
       renderShop();
-      tg.HapticFeedback?.notificationOccurred("success");
+      tg.HapticFeedback?.notificationOccurred?.("success");
       const discountLine = result.discount_percent
-        ? `\nRéduction roue appliquée : -${result.discount_percent}%`
+        ? `\nRéduction appliquée : -${result.discount_percent}%`
         : "";
       tg.showPopup(
         {
           title: "Commande confirmée",
-          message: `Commande #${result.order_id} enregistrée pour ${formatPrice(
-            result.total_cents,
-            result.currency
-          )}.${discountLine}\nLe récapitulatif t'a été envoyé dans le chat.`,
+          message:
+            `Commande #${result.order_id} · ${formatPrice(result.total_cents, result.currency)}` +
+            `${discountLine}\n\nLe récapitulatif t'attend dans le chat.`,
           buttons: [{ type: "close" }],
         },
         () => tg.close()
       );
     } catch (err) {
-      tg.HapticFeedback?.notificationOccurred("error");
-      showError(err.message);
+      tg.HapticFeedback?.notificationOccurred?.("error");
+      showToast(err.message);
     } finally {
       tg.MainButton.hideProgress();
     }
@@ -386,40 +535,55 @@
     try {
       const status = await apiFetch("/api/wheel/status");
       if (status.can_spin) {
-        wheelStatusEl.textContent = "Un tour gratuit t'attend aujourd'hui !";
+        wheelStatusEl.innerHTML = "Ton invitation du jour t'attend.";
         wheelSpinBtn.disabled = false;
         wheelSpinBtn.textContent = "Tourner la roue";
       } else {
-        const prizeLabel = status.prize ? status.prize.label : "un lot";
-        wheelStatusEl.textContent = `Tu as déjà gagné aujourd'hui : ${prizeLabel}. Reviens demain !`;
-        wheelSpinBtn.disabled = true;
-        wheelSpinBtn.textContent = "Déjà joué aujourd'hui";
+        const label = status.prize ? escapeHtml(status.prize.label) : "un lot";
+        wheelStatusEl.innerHTML = `Déjà honorée aujourd'hui — <span class="wheel-prize">${label}</span>. Reviens demain.`;
+        wheelSpinBtn.textContent = "Reviens demain";
       }
     } catch (err) {
       wheelStatusEl.textContent = "Impossible de charger la roue pour le moment.";
-      showError(err.message);
+      showToast(err.message);
     }
+  }
+
+  function animateSpin() {
+    // Plusieurs tours complets + un arrêt aléatoire : la position finale n'a
+    // pas de sens métier (le lot est tiré côté serveur), elle sert uniquement
+    // à rendre l'attente agréable.
+    wheelRotation += 4 * 360 + Math.floor(Math.random() * 360);
+    wheelGraphicEl.style.transform = `rotate(${wheelRotation}deg)`;
   }
 
   wheelSpinBtn.addEventListener("click", async () => {
     wheelSpinBtn.disabled = true;
+    wheelStatusEl.textContent = "La roue tourne…";
+    animateSpin();
+    tg?.HapticFeedback?.impactOccurred?.("medium");
+
+    const startedAt = Date.now();
+    let prize;
     try {
-      const prize = await apiFetch("/api/wheel/spin", { method: "POST" });
-      tg?.HapticFeedback?.notificationOccurred("success");
-      if (tg) {
-        tg.showPopup({
-          title: "🎉 Gagné !",
-          message: `${prize.label}\n${prize.description}`,
-          buttons: [{ type: "close" }],
-        });
-      } else {
-        window.alert(`${prize.label}\n${prize.description}`);
-      }
-      await refreshWheelStatus();
+      prize = await apiFetch("/api/wheel/spin", { method: "POST" });
     } catch (err) {
-      showError(err.message);
+      showToast(err.message);
       await refreshWheelStatus();
+      return;
     }
+
+    const remaining = Math.max(0, SPIN_DURATION_MS - (Date.now() - startedAt));
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+
+    tg?.HapticFeedback?.notificationOccurred?.("success");
+    const message = `${prize.label}\n\n${prize.description}`;
+    if (tg?.showPopup) {
+      tg.showPopup({ title: "🎉 Gagné !", message, buttons: [{ type: "close" }] });
+    } else {
+      showToast(`${prize.label} — ${prize.description}`, "success");
+    }
+    await refreshWheelStatus();
   });
 
   // ------------------------------------------------------------------
@@ -427,7 +591,6 @@
   // ------------------------------------------------------------------
 
   async function refreshVipStatus() {
-    vipContentEl.innerHTML = '<p class="loading">Chargement…</p>';
     try {
       const [status, vipProducts] = await Promise.all([
         apiFetch("/api/vip/status"),
@@ -435,8 +598,8 @@
       ]);
       renderVip(status, vipProducts);
     } catch (err) {
-      vipContentEl.innerHTML = '<p class="loading">Impossible de charger le statut VIP.</p>';
-      showError(err.message);
+      renderEmpty(vipContentEl, "♔", "Le cercle est inaccessible pour le moment.");
+      showToast(err.message);
     }
   }
 
@@ -444,47 +607,61 @@
     vipContentEl.innerHTML = "";
 
     if (status.active) {
-      const activeCard = document.createElement("div");
-      activeCard.className = "vip-card vip-active";
-      const expires = status.expires_at ? formatDateTime(status.expires_at) : "";
-      activeCard.innerHTML = `
-        <p class="vip-badge">⭐ VIP actif</p>
-        <p class="vip-plan-name">${escapeHtml(status.plan_name || "")}</p>
-        <p class="vip-expiry">Actif jusqu'au ${escapeHtml(expires)}</p>
+      const hero = document.createElement("div");
+      hero.className = "vip-hero";
+      hero.innerHTML = `
+        <p class="vip-crown">♔</p>
+        <p class="badge">Membre du cercle</p>
+        <p class="vip-plan-name">${escapeHtml(status.plan_name || "VIP")}</p>
+        <p class="vip-expiry">Ton accès court jusqu'au ${escapeHtml(formatDate(status.expires_at))}</p>
       `;
-      vipContentEl.appendChild(activeCard);
+      vipContentEl.appendChild(hero);
       return;
     }
 
     if (!vipProducts.length) {
-      vipContentEl.innerHTML = '<p class="loading">Aucune formule VIP disponible pour le moment.</p>';
+      renderEmpty(vipContentEl, "♔", "Aucune formule n'est ouverte pour le moment.");
       return;
     }
 
     for (const product of vipProducts) {
       const entry = cartByProduct.get(product.id);
       const card = document.createElement("div");
-      card.className = "vip-card";
+      card.className = "vip-hero";
+
+      // La description en base fait foi : si elle contient des puces (retours
+      // à la ligne, · ou •), on l'affiche en liste d'avantages.
+      const parts = String(product.description)
+        .split(/\r?\n|·|•/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+      const details =
+        parts.length > 1
+          ? `<ul class="perks">${parts.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>`
+          : `<p class="vip-expiry">${escapeHtml(product.description)}</p>`;
+
       card.innerHTML = `
+        <p class="vip-crown">♔</p>
         <p class="vip-plan-name">${escapeHtml(product.name)}</p>
-        <p class="product-description">${escapeHtml(product.description)}</p>
-        <p class="product-price">${formatPrice(product.price_cents, product.currency)}</p>
+        <p class="vip-price">${formatPrice(product.price_cents, product.currency)}<small> / mois</small></p>
+        ${details}
       `;
 
       const button = document.createElement("button");
       if (entry?.quantity) {
-        button.className = "remove-btn";
+        button.className = "btn btn-ghost btn-block";
         button.textContent = "Retirer du panier";
         button.addEventListener("click", async () => {
           await removeCartItem(product.id);
           await refreshVipStatus();
         });
       } else {
-        button.className = "add-btn";
-        button.textContent = "S'abonner (ajouter au panier)";
+        button.className = "btn btn-gold btn-block";
+        button.textContent = "Demander l'accès";
         button.addEventListener("click", async () => {
           await changeQuantity(product.id, 1);
           await refreshVipStatus();
+          showToast("Ajouté au panier — valide depuis l'onglet Boutique.", "success");
         });
       }
       card.appendChild(button);
@@ -493,8 +670,7 @@
 
     const hint = document.createElement("p");
     hint.className = "vip-hint";
-    hint.textContent =
-      "Valide ensuite ta commande depuis l'onglet Boutique (bouton en bas de l'écran).";
+    hint.textContent = "La commande se conclut depuis l'onglet Boutique.";
     vipContentEl.appendChild(hint);
   }
 
@@ -506,7 +682,16 @@
     if (tg) {
       tg.ready();
       tg.expand();
+      applyTheme();
+      tg.onEvent?.("themeChanged", applyTheme);
       tg.MainButton.onClick(handleCheckout);
+      try {
+        tg.MainButton.setParams({ color: "#c4a574", text_color: "#241c08" });
+      } catch (err) {
+        // setParams n'existe pas sur les clients Telegram antérieurs à Bot API 6.1.
+      }
+    } else {
+      applyTheme();
     }
 
     switchTab("shop");
@@ -515,8 +700,8 @@
       await fetchCatalog();
       renderShop();
     } catch (err) {
-      showError(err.message);
-      photoListEl.innerHTML = '<p class="loading">Impossible de charger le catalogue.</p>';
+      showToast(err.message);
+      renderEmpty(photoListEl, "◇", "Impossible de charger la sélection.");
       callListEl.innerHTML = "";
     }
   }
