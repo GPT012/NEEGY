@@ -135,8 +135,8 @@
     const scheme = tg?.colorScheme === "dark" ? "dark" : "light";
     document.documentElement.setAttribute("data-theme", scheme);
     try {
-      tg?.setHeaderColor?.(scheme === "dark" ? "#12110f" : "#f7f4ee");
-      tg?.setBackgroundColor?.(scheme === "dark" ? "#12110f" : "#f7f4ee");
+      tg?.setHeaderColor?.(scheme === "dark" ? "#1a1014" : "#fdf4f7");
+      tg?.setBackgroundColor?.(scheme === "dark" ? "#1a1014" : "#fdf4f7");
     } catch (err) {
       // Clients Telegram antérieurs à Bot API 6.1.
     }
@@ -686,7 +686,7 @@
       tg.onEvent?.("themeChanged", applyTheme);
       tg.MainButton.onClick(handleCheckout);
       try {
-        tg.MainButton.setParams({ color: "#c4a574", text_color: "#241c08" });
+        tg.MainButton.setParams({ color: "#e8a0b8", text_color: "#4a2432" });
       } catch (err) {
         // setParams n'existe pas sur les clients Telegram antérieurs à Bot API 6.1.
       }

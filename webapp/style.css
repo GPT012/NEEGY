@@ -1,4 +1,4 @@
-/* Identité "maison" : ivoire, encre et champagne.
+/* Identité sakura : ivoire rosé, cerisier, et cramoisi pour le plus rare.
    On s'appuie sur les variables Telegram (clair/sombre auto) sans
    color-mix() ni :has() — les WebViews Telegram anciennes (Android)
    ne les supportent pas encore. */
@@ -6,23 +6,23 @@
 :root {
   color-scheme: light dark;
 
-  --gold: #c4a574;
-  --gold-deep: #9a7848;
-  --gold-light: #e8d5b5;
-  --gold-soft: rgba(196, 165, 116, 0.16);
-  --gold-border: rgba(196, 165, 116, 0.38);
+  --gold: #e8a0b8;
+  --gold-deep: #c45c7a;
+  --gold-light: #f6cdd8;
+  --gold-soft: rgba(232, 160, 184, 0.18);
+  --gold-border: rgba(216, 120, 148, 0.38);
 
-  --bg: var(--tg-theme-bg-color, #f7f4ee);
-  --surface: var(--tg-theme-secondary-bg-color, #fffdf8);
-  --text: var(--tg-theme-text-color, #1c1914);
-  --hint: var(--tg-theme-hint-color, #8a8378);
-  --btn: var(--tg-theme-button-color, #1c1914);
-  --btn-text: var(--tg-theme-button-text-color, #f7f4ee);
+  --bg: var(--tg-theme-bg-color, #fdf4f7);
+  --surface: var(--tg-theme-secondary-bg-color, #fff9fb);
+  --text: var(--tg-theme-text-color, #3d2430);
+  --hint: var(--tg-theme-hint-color, #a88996);
+  --btn: var(--tg-theme-button-color, #c45c7a);
+  --btn-text: var(--tg-theme-button-text-color, #fff7fa);
 
-  --line: rgba(120, 108, 90, 0.16);
-  --ink: #1c1914;
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.4) inset, 0 10px 28px rgba(40, 32, 18, 0.06);
-  --shadow-float: 0 18px 40px rgba(20, 16, 10, 0.28);
+  --line: rgba(180, 110, 130, 0.16);
+  --ink: #4a2432;
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 10px 28px rgba(140, 60, 80, 0.07);
+  --shadow-float: 0 18px 40px rgba(90, 30, 50, 0.22);
 
   --font-serif: "Cormorant Garamond", "Palatino Linotype", Palatino, Georgia, serif;
   --font-sans: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -34,14 +34,14 @@
 }
 
 html[data-theme="dark"] {
-  --bg: var(--tg-theme-bg-color, #12110f);
-  --surface: var(--tg-theme-secondary-bg-color, #1b1916);
-  --text: var(--tg-theme-text-color, #f3eee6);
-  --hint: var(--tg-theme-hint-color, #9a9286);
-  --btn: var(--tg-theme-button-color, #c4a574);
-  --btn-text: var(--tg-theme-button-text-color, #1c1914);
-  --line: rgba(232, 213, 181, 0.12);
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 12px 32px rgba(0, 0, 0, 0.28);
+  --bg: var(--tg-theme-bg-color, #1a1014);
+  --surface: var(--tg-theme-secondary-bg-color, #26151c);
+  --text: var(--tg-theme-text-color, #f8eef2);
+  --hint: var(--tg-theme-hint-color, #c4a0ae);
+  --btn: var(--tg-theme-button-color, #e8a0b8);
+  --btn-text: var(--tg-theme-button-text-color, #3d2430);
+  --line: rgba(248, 200, 214, 0.14);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 12px 32px rgba(0, 0, 0, 0.32);
 }
 
 * {
@@ -55,9 +55,19 @@ body {
   font-family: var(--font-sans);
   font-size: 15px;
   line-height: 1.5;
-  background: var(--bg);
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(255, 196, 214, 0.45), transparent 42%),
+    radial-gradient(ellipse at 92% 18%, rgba(255, 170, 190, 0.28), transparent 38%),
+    var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+}
+
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(180, 70, 100, 0.28), transparent 42%),
+    radial-gradient(ellipse at 92% 18%, rgba(120, 30, 50, 0.35), transparent 38%),
+    var(--bg);
 }
 
 .grain {
@@ -223,7 +233,7 @@ body {
   min-height: 340px;
   padding: 12px 12px 14px;
   border-radius: 14px;
-  border: 3px solid #f4e7b0;
+  border: 3px solid #f4c9d6;
   color: #fff8e7;
   overflow: hidden;
   box-shadow:
@@ -264,7 +274,7 @@ body {
     transparent 20%,
     rgba(255, 255, 255, 0.08) 35%,
     rgba(255, 255, 255, 0.45) 48%,
-    rgba(180, 220, 255, 0.2) 52%,
+    rgba(255, 210, 224, 0.28) 52%,
     transparent 70%
   );
   background-size: 220% 220%;
@@ -282,7 +292,7 @@ body {
     radial-gradient(circle at 18% 22%, #fff 1px, transparent 1.6px),
     radial-gradient(circle at 78% 18%, #fff 1.2px, transparent 2px),
     radial-gradient(circle at 62% 72%, #fff 1px, transparent 1.8px),
-    radial-gradient(circle at 28% 78%, #ffe56d 1px, transparent 1.8px);
+    radial-gradient(circle at 28% 78%, #ffc0d4 1px, transparent 1.8px);
 }
 
 @keyframes foil-sweep {
@@ -363,7 +373,7 @@ body {
   margin: 0 -4px 8px;
   padding: 6px 0 4px;
   background: #111;
-  color: #ffe56d;
+  color: #ffd6e4;
   font-family: var(--font-display);
   font-size: 18px;
   letter-spacing: 0.12em;
@@ -395,7 +405,7 @@ body {
   font-family: var(--font-display);
   font-size: 22px;
   letter-spacing: 0.03em;
-  color: #fff6c2;
+  color: #ffe4ee;
   text-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
 }
 
@@ -406,7 +416,7 @@ body {
 
 .booster.in-cart {
   box-shadow:
-    0 0 0 2px #ffe56d,
+    0 0 0 2px #f4b6c8,
     0 14px 28px rgba(0, 0, 0, 0.28);
 }
 
@@ -426,53 +436,55 @@ body {
 
 .booster-common {
   background:
-    radial-gradient(circle at 20% 15%, rgba(255, 255, 255, 0.18), transparent 40%),
-    linear-gradient(165deg, #1f7a3c 0%, #0d4a24 55%, #083318 100%);
+    radial-gradient(circle at 20% 15%, rgba(255, 255, 255, 0.42), transparent 40%),
+    linear-gradient(165deg, #f4b6c8 0%, #e48aa6 55%, #c96b88 100%);
+  border-color: #f8d5e0;
 }
 
 .booster-common .booster-energy {
-  background: radial-gradient(circle at 30% 30%, #b6f5a2, #2ecc71 55%, #145a32);
+  background: radial-gradient(circle at 30% 30%, #fff0f5, #f3a6bc 55%, #d97896);
 }
 
 .booster-uncommon {
   background:
-    radial-gradient(circle at 80% 10%, rgba(160, 210, 255, 0.28), transparent 42%),
-    linear-gradient(165deg, #1a5fa8 0%, #123a72 55%, #0a2448 100%);
+    radial-gradient(circle at 80% 10%, rgba(255, 200, 214, 0.4), transparent 42%),
+    linear-gradient(165deg, #e07a98 0%, #c45c7a 55%, #8f3d58 100%);
+  border-color: #f0b0c2;
 }
 
 .booster-uncommon .booster-energy {
-  background: radial-gradient(circle at 30% 30%, #c8ecff, #3498db 55%, #1a5276);
+  background: radial-gradient(circle at 30% 30%, #ffd6e4, #e07090 55%, #a83d5e);
 }
 
 .booster-rare {
   background:
-    radial-gradient(circle at 50% 0%, rgba(255, 240, 160, 0.4), transparent 45%),
-    linear-gradient(165deg, #c9a227 0%, #8a5a12 48%, #3d2a08 100%);
-  border-color: #ffe56d;
+    radial-gradient(circle at 50% 0%, rgba(255, 160, 160, 0.45), transparent 45%),
+    linear-gradient(165deg, #d64545 0%, #a61c34 48%, #5c101c 100%);
+  border-color: #ff8a9a;
 }
 
 .booster-rare .booster-energy {
-  background: radial-gradient(circle at 30% 30%, #fff4b0, #f4d03f 55%, #b7950b);
+  background: radial-gradient(circle at 30% 30%, #ffc4c8, #e74c5c 55%, #922b2b);
 }
 
 .booster-fire {
   background:
-    radial-gradient(circle at 30% 0%, rgba(255, 160, 80, 0.35), transparent 42%),
-    linear-gradient(165deg, #d35400 0%, #922b21 52%, #4a1410 100%);
+    radial-gradient(circle at 30% 0%, rgba(255, 190, 200, 0.38), transparent 42%),
+    linear-gradient(165deg, #e89ab0 0%, #c45c7a 52%, #7a3048 100%);
 }
 
 .booster-fire .booster-energy {
-  background: radial-gradient(circle at 30% 30%, #ffd0a8, #e74c3c 55%, #7b241c);
+  background: radial-gradient(circle at 30% 30%, #ffe0ea, #e07090 55%, #a83d5e);
 }
 
 .booster-psy {
   background:
-    radial-gradient(circle at 70% 5%, rgba(220, 160, 255, 0.32), transparent 42%),
-    linear-gradient(165deg, #8e44ad 0%, #5b2c6f 52%, #2c1038 100%);
+    radial-gradient(circle at 70% 5%, rgba(255, 120, 140, 0.32), transparent 42%),
+    linear-gradient(165deg, #c0392b 0%, #7b1e2c 52%, #3d1018 100%);
 }
 
 .booster-psy .booster-energy {
-  background: radial-gradient(circle at 30% 30%, #f5d0fe, #af7ac5 55%, #6c3483);
+  background: radial-gradient(circle at 30% 30%, #ffc8c4, #c0392b 55%, #7b1e2c);
 }
 
 .card {
@@ -638,8 +650,8 @@ html[data-theme="dark"] .btn-primary {
 
 .btn-gold {
   background: linear-gradient(160deg, var(--gold-light) 0%, var(--gold) 48%, var(--gold-deep) 100%);
-  color: #241c08;
-  box-shadow: 0 8px 20px rgba(154, 120, 72, 0.28);
+  color: #4a2432;
+  box-shadow: 0 8px 20px rgba(196, 92, 122, 0.28);
 }
 
 .btn-ghost {
@@ -686,7 +698,7 @@ html[data-theme="dark"] .btn-primary {
   border: none;
   border-radius: 50%;
   background: linear-gradient(160deg, var(--gold-light), var(--gold));
-  color: #241c08;
+  color: #4a2432;
   font-size: 18px;
   font-weight: 600;
   line-height: 1;
@@ -789,13 +801,13 @@ html[data-theme="dark"] .slot-booked-label small {
   border: 7px solid var(--surface);
   box-shadow: var(--shadow-float), 0 0 0 1px var(--gold-border);
   background: conic-gradient(
-    #1c1914 0deg 45deg,
+    #4a2432 0deg 45deg,
     var(--gold) 45deg 90deg,
-    #2a261f 90deg 135deg,
+    #7a3048 90deg 135deg,
     var(--gold-light) 135deg 180deg,
-    #1c1914 180deg 225deg,
-    var(--gold) 225deg 270deg,
-    #2a261f 270deg 315deg,
+    #4a2432 180deg 225deg,
+    #c0392b 225deg 270deg,
+    #7a3048 270deg 315deg,
     var(--gold-light) 315deg 360deg
   );
   transition: transform 3.4s cubic-bezier(0.12, 0.86, 0.08, 1);
@@ -878,7 +890,7 @@ html[data-theme="dark"] .slot-booked-label small {
   border-radius: var(--radius-lg);
   border: 1px solid var(--gold-border);
   background:
-    linear-gradient(145deg, rgba(196, 165, 116, 0.22), transparent 55%),
+    linear-gradient(145deg, rgba(232, 160, 184, 0.28), rgba(192, 57, 43, 0.08) 55%),
     var(--surface);
   text-align: center;
 }
@@ -1131,7 +1143,7 @@ html[data-theme="dark"] .tab-btn.active .tab-label {
   padding: 0 4px;
   border-radius: 999px;
   background: var(--gold);
-  color: #241c08;
+  color: #4a2432;
   font-size: 10px;
   font-weight: 700;
   line-height: 16px;
