@@ -1,0 +1,14 @@
+---
+description: Règles de sécurité pour le bot Telegram
+globs: ["**/*.py"]
+alwaysApply: true
+---
+
+- Ne jamais coder en dur un token, une clé API ou un secret. Toujours passer par des variables d'environnement (python-dotenv).
+- Toutes les requêtes SQL doivent être paramétrées, jamais de f-string ou concaténation.
+- Valider et échapper tout contenu utilisateur avant de le renvoyer (Markdown/HTML Telegram).
+- Ajouter un rate limiting par user_id sur toute commande qui déclenche une action coûteuse.
+- Toujours utiliser des blocs try/except explicites autour des appels API Telegram, ne jamais laisser une exception remonter avec la stack trace vers l'utilisateur.
+- Utiliser aiogram en mode asynchrone (async/await), pas de code bloquant dans les handlers.
+- Vérifier le secret_token du webhook Telegram sur chaque requête entrante.
+- Logger les erreurs mais jamais les tokens, mots de passe ou messages privés en clair.

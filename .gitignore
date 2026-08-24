@@ -1,0 +1,15 @@
+# Secrets / configuration locale
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
