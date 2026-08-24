@@ -8,6 +8,8 @@ quel par le client.
 
 from __future__ import annotations
 
+import json
+
 from aiogram import Bot
 from aiohttp import web
 import asyncpg
@@ -22,6 +24,18 @@ routes = web.RouteTableDef()
 
 INIT_DATA_HEADER = "X-Telegram-Init-Data"
 GENERIC_ERROR_BODY = {"error": "Une erreur est survenue. Merci de réessayer plus tard."}
+UNAVAILABLE_BODY = {"error": "La boutique est momentanément indisponible. Réessaie dans quelques minutes."}
+
+
+def _get_pool(request: web.Request) -> asyncpg.Pool:
+    """Retourne le pool, ou lève 503 si l'app tourne en mode dégradé (base injoignable)."""
+    pool = request.app.get("db_pool")
+    if pool is None:
+        raise web.HTTPServiceUnavailable(
+            text=json.dumps(UNAVAILABLE_BODY),
+            content_type="application/json",
+        )
+    return pool
 
 
 def _authenticate(request: web.Request) -> int:
@@ -68,7 +82,7 @@ def _serialize_cart(items: list[CartItem]) -> dict:
 
 @routes.get("/api/products")
 async def get_products(request: web.Request) -> web.Response:
-    pool: asyncpg.Pool = request.app["db_pool"]
+    pool = _get_pool(request)
     try:
         products = await list_products(pool)
         return web.json_response([_serialize_product(p) for p in products])
@@ -80,7 +94,7 @@ async def get_products(request: web.Request) -> web.Response:
 @routes.get("/api/cart")
 async def get_user_cart(request: web.Request) -> web.Response:
     user_id = _authenticate(request)
-    pool: asyncpg.Pool = request.app["db_pool"]
+    pool = _get_pool(request)
     try:
         items = await get_cart(pool, user_id)
         return web.json_response(_serialize_cart(items))
@@ -92,7 +106,7 @@ async def get_user_cart(request: web.Request) -> web.Response:
 @routes.post("/api/cart")
 async def update_cart_item(request: web.Request) -> web.Response:
     user_id = _authenticate(request)
-    pool: asyncpg.Pool = request.app["db_pool"]
+    pool = _get_pool(request)
 
     try:
         body = await request.json()
@@ -115,7 +129,7 @@ async def update_cart_item(request: web.Request) -> web.Response:
 @routes.delete("/api/cart/{product_id}")
 async def delete_cart_item(request: web.Request) -> web.Response:
     user_id = _authenticate(request)
-    pool: asyncpg.Pool = request.app["db_pool"]
+    pool = _get_pool(request)
 
     try:
         product_id = int(request.match_info["product_id"])
@@ -134,7 +148,7 @@ async def delete_cart_item(request: web.Request) -> web.Response:
 @routes.post("/api/checkout")
 async def checkout(request: web.Request) -> web.Response:
     user_id = _authenticate(request)
-    pool: asyncpg.Pool = request.app["db_pool"]
+    pool = _get_pool(request)
     bot: Bot = request.app["bot"]
 
     try:

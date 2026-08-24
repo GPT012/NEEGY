@@ -28,7 +28,7 @@ from aiohttp import web
 
 from api import webapp_routes
 from config import config
-from db.pool import close_pool, create_pool
+from db.pool import close_pool, create_pool, describe_dsn
 from handlers import commands, menu
 from middlewares.throttling import ThrottlingMiddleware
 from utils.logger import get_logger, setup_logging
@@ -116,7 +116,22 @@ async def _on_startup(bot: Bot) -> None:
 
 
 async def _on_app_startup(app: web.Application) -> None:
-    app["db_pool"] = await create_pool(config.database_url)
+    """Initialise le pool PostgreSQL sans bloquer le démarrage en cas d'échec.
+
+    Une base injoignable ne doit pas empêcher le bot de répondre : le process
+    démarre en mode dégradé (routes Mini App en 503, voir webapp_routes) plutôt
+    que de boucler sur des redémarrages, ce qui rend les logs illisibles et
+    laisse le webhook Telegram sans destinataire.
+    """
+    try:
+        app["db_pool"] = await create_pool(config.database_url)
+    except Exception:
+        app["db_pool"] = None
+        logger.exception(
+            "Base de données injoignable : démarrage en mode dégradé "
+            "(la boutique restera indisponible). Paramètres reçus : %s",
+            describe_dsn(config.database_url),
+        )
 
 
 async def _on_app_cleanup(app: web.Application) -> None:
@@ -159,8 +174,23 @@ async def webhook_secret_middleware(request: web.Request, handler) -> web.Stream
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    """Healthcheck non protégé, utilisé par Railway pour vérifier que le service est vivant."""
-    return web.json_response({"status": "ok"})
+    """Healthcheck non protégé, utilisé par Railway pour vérifier que le service est vivant.
+
+    Renvoie toujours 200 tant que le process répond, avec le détail de l'état de
+    la base : pratique pour diagnostiquer un démarrage en mode dégradé sans
+    fouiller les logs.
+    """
+    pool = request.app.get("db_pool")
+    database_ok = False
+    if pool is not None:
+        try:
+            async with pool.acquire() as connection:
+                await connection.fetchval("SELECT 1")
+            database_ok = True
+        except Exception:
+            logger.exception("Healthcheck : la base de données ne répond pas")
+
+    return web.json_response({"status": "ok", "database": "ok" if database_ok else "indisponible"})
 
 
 async def handle_webapp_index(request: web.Request) -> web.FileResponse:
