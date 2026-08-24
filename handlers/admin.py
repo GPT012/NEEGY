@@ -26,6 +26,7 @@ from db.repository import (
     get_order,
     get_photo_items_label,
     list_orders_to_ship,
+    list_pending_orders,
     list_upcoming_call_slots,
     mark_order_paid,
     mark_order_shipped,
@@ -33,6 +34,7 @@ from db.repository import (
 from keyboards.admin import (
     CALLBACK_PAY_PREFIX,
     CALLBACK_SHIP_PREFIX,
+    orders_inbox_keyboard,
     shipped_keyboard,
 )
 from utils.logger import get_logger
@@ -55,6 +57,41 @@ def _who(name: str | None, username: str | None, user_id: int) -> str:
     if name:
         return escape(name)
     return f"user {user_id}"
+
+
+def _is_orders_inbox(callback: CallbackQuery) -> bool:
+    text = callback.message.text if callback.message else ""
+    if not text:
+        return False
+    return text.startswith(("À encaisser", "À envoyer", "Rien en attente"))
+
+
+def _task_line(task) -> str:
+    who = _who(task.customer_name, task.telegram_username, task.user_id)
+    return f"#{task.order_id}  {escape(task.items_label)}  →  {who}"
+
+
+async def _orders_inbox(db_pool: asyncpg.Pool) -> tuple[str, object]:
+    pending = await list_pending_orders(db_pool)
+    to_ship = await list_orders_to_ship(db_pool)
+    if not pending and not to_ship:
+        return "Rien en attente.", None
+
+    lines: list[str] = []
+    if pending:
+        lines.append("À encaisser :\n")
+        lines.extend(_task_line(task) for task in pending)
+    if to_ship:
+        if lines:
+            lines.append("")
+        lines.append("À envoyer :\n")
+        lines.extend(_task_line(task) for task in to_ship)
+
+    markup = orders_inbox_keyboard(
+        [task.order_id for task in pending],
+        [task.order_id for task in to_ship],
+    )
+    return "\n".join(lines), markup
 
 
 def _parse_order_callback(data: str | None, prefix: str) -> int | None:
@@ -208,21 +245,11 @@ async def handle_orders(message: Message, db_pool: asyncpg.Pool | None) -> None:
         return
 
     try:
-        tasks = await list_orders_to_ship(db_pool)
+        text, markup = await _orders_inbox(db_pool)
+        await message.answer(text, reply_markup=markup)
     except Exception:
-        logger.exception("Erreur lors de la récupération des commandes à envoyer")
+        logger.exception("Erreur lors de la récupération des commandes")
         await message.answer(GENERIC_ERROR_MESSAGE)
-        return
-
-    if not tasks:
-        await message.answer("Rien à envoyer.")
-        return
-
-    lines = ["À envoyer :\n"]
-    for task in tasks:
-        who = _who(task.customer_name, task.telegram_username, task.user_id)
-        lines.append(f"#{task.order_id}  {task.items_label}  →  {who}")
-    await message.answer("\n".join(lines))
 
 
 @router.message(Command("ship"))
@@ -263,8 +290,15 @@ async def _respond_admin_callback(
         return
     try:
         await callback.message.edit_text(text, reply_markup=markup)
-    except TelegramBadRequest:
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            return
         await callback.message.answer(text, reply_markup=markup)
+
+
+async def _refresh_orders_inbox(callback: CallbackQuery, db_pool: asyncpg.Pool, toast: str) -> None:
+    text, markup = await _orders_inbox(db_pool)
+    await _respond_admin_callback(callback, text, markup, toast=toast)
 
 
 @router.callback_query(F.from_user.id == config.admin_user_id, F.data.startswith(CALLBACK_PAY_PREFIX))
@@ -280,6 +314,10 @@ async def handle_pay_callback(
         return
     try:
         text, show_ship = await _confirm_payment(bot, db_pool, order_id)
+        if _is_orders_inbox(callback):
+            toast = "Confirmé" if "confirmée" in text else text[:180]
+            await _refresh_orders_inbox(callback, db_pool, toast=toast)
+            return
         await _respond_admin_callback(
             callback,
             text,
@@ -305,6 +343,9 @@ async def handle_ship_callback(callback: CallbackQuery, db_pool: asyncpg.Pool | 
     except Exception:
         logger.exception("Erreur callback envoi commande #%s", order_id)
         await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
+        return
+    if shipped and _is_orders_inbox(callback):
+        await _refresh_orders_inbox(callback, db_pool, toast="Envoyée")
         return
     if shipped:
         await _respond_admin_callback(callback, f"#{order_id} envoyée.", toast="Envoyée")

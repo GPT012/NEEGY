@@ -623,6 +623,43 @@ async def mark_order_paid(pool: asyncpg.Pool, order_id: int) -> bool:
     return result.endswith(" 1")
 
 
+def _rows_to_ship_tasks(rows) -> list[ShipTask]:
+    return [
+        ShipTask(
+            order_id=row["id"],
+            user_id=row["user_id"],
+            customer_name=row["customer_name"],
+            telegram_username=row["telegram_username"],
+            items_label=row["items_label"],
+        )
+        for row in rows
+    ]
+
+
+async def list_pending_orders(pool: asyncpg.Pool) -> list[ShipTask]:
+    """Commandes en attente de confirmation de paiement."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            o.id,
+            o.user_id,
+            o.customer_name,
+            o.telegram_username,
+            string_agg(
+                oi.product_name || CASE WHEN oi.quantity > 1 THEN ' x' || oi.quantity ELSE '' END,
+                ', '
+                ORDER BY oi.id
+            ) AS items_label
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.status = 'pending'
+        GROUP BY o.id, o.user_id, o.customer_name, o.telegram_username
+        ORDER BY o.id
+        """
+    )
+    return _rows_to_ship_tasks(rows)
+
+
 async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
     """Commandes payées dont les photos n'ont pas encore été envoyées."""
     rows = await pool.fetch(
@@ -647,16 +684,7 @@ async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
         ORDER BY o.id
         """
     )
-    return [
-        ShipTask(
-            order_id=row["id"],
-            user_id=row["user_id"],
-            customer_name=row["customer_name"],
-            telegram_username=row["telegram_username"],
-            items_label=row["items_label"],
-        )
-        for row in rows
-    ]
+    return _rows_to_ship_tasks(rows)
 
 
 async def get_photo_items_label(pool: asyncpg.Pool, order_id: int) -> str | None:
