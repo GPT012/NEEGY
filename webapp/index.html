@@ -9,15 +9,46 @@
 </head>
 <body>
   <header class="header">
-    <h1>Nos services</h1>
-    <p class="subtitle">Choisis ce qu'il te faut, ajoute-le au panier.</p>
+    <h1 id="page-title">Nos services</h1>
+    <p class="subtitle" id="page-subtitle">Choisis ce qu'il te faut, ajoute-le au panier.</p>
   </header>
 
-  <main id="product-list" class="product-list" aria-live="polite">
-    <p class="loading">Chargement du catalogue…</p>
+  <main id="view-shop" class="view" aria-live="polite">
+    <section>
+      <h2 class="section-title">📸 Photos</h2>
+      <div id="photo-list" class="product-list">
+        <p class="loading">Chargement…</p>
+      </div>
+    </section>
+    <section>
+      <h2 class="section-title">📞 Appels</h2>
+      <div id="call-list" class="product-list">
+        <p class="loading">Chargement…</p>
+      </div>
+    </section>
+  </main>
+
+  <main id="view-wheel" class="view" hidden>
+    <div class="wheel-card">
+      <p class="wheel-emoji">🎡</p>
+      <p id="wheel-status-text" class="wheel-status">Chargement…</p>
+      <button id="wheel-spin-btn" class="spin-btn" disabled>Tourner la roue</button>
+    </div>
+  </main>
+
+  <main id="view-vip" class="view" hidden>
+    <div id="vip-content">
+      <p class="loading">Chargement…</p>
+    </div>
   </main>
 
   <p id="error-banner" class="error-banner" hidden></p>
+
+  <nav class="tab-bar">
+    <button class="tab-btn" data-tab="shop">🛍️<span>Boutique</span></button>
+    <button class="tab-btn" data-tab="wheel">🎡<span>Roue</span></button>
+    <button class="tab-btn" data-tab="vip">⭐<span>VIP</span></button>
+  </nav>
 
   <script src="app.js"></script>
 </body>

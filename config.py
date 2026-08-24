@@ -62,6 +62,18 @@ def _get_int(name: str, default: int) -> int:
         raise ConfigError(f"Variable d'environnement invalide (entier attendu) : {name}") from exc
 
 
+def _get_required_int(name: str) -> int:
+    value = _get_str(name)
+    if not value:
+        raise ConfigError(f"Variable d'environnement requise manquante : {name}")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{name} doit être un entier (ID Telegram numérique), reçu : {value!r}"
+        ) from exc
+
+
 @dataclass(frozen=True)
 class Config:
     bot_token: str
@@ -75,6 +87,8 @@ class Config:
 
     database_url: str | None
     mini_app_url: str | None
+
+    admin_user_id: int | None
 
     log_level: str
     log_file_path: str
@@ -115,6 +129,16 @@ def load_config() -> Config:
                 "(URL publique HTTPS servant la Mini App, ex: https://<domaine>/webapp/)."
             )
         _check_https_url("MINI_APP_URL", mini_app_url, "https://mon-domaine/webapp/")
+        if not _get_str("ADMIN_USER_ID"):
+            raise ConfigError(
+                "ADMIN_USER_ID est requis quand USE_WEBHOOK=true "
+                "(ID Telegram numérique recevant les notifications de commande "
+                "et autorisé à utiliser les commandes admin ; envoie /start à "
+                "@userinfobot pour connaître le tien)."
+            )
+
+    admin_user_id_raw = _get_str("ADMIN_USER_ID")
+    admin_user_id = _get_required_int("ADMIN_USER_ID") if admin_user_id_raw else None
 
     return Config(
         bot_token=_get_required("BOT_TOKEN"),
@@ -128,6 +152,7 @@ def load_config() -> Config:
         webapp_port=_get_int("PORT", _get_int("WEBAPP_PORT", 8080)),
         database_url=database_url,
         mini_app_url=mini_app_url,
+        admin_user_id=admin_user_id,
         log_level=_get_str("LOG_LEVEL", "INFO"),
         log_file_path=_get_str("LOG_FILE_PATH", "logs/errors.log"),
     )

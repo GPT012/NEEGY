@@ -1,9 +1,9 @@
-"""Routes HTTP de la Mini App : catalogue, panier, checkout.
+"""Routes HTTP de la Mini App : catalogue, panier, checkout, roue, VIP.
 
-Toutes les routes qui touchent au panier exigent un `initData` Telegram
-valide (header `X-Telegram-Init-Data`), revalidé à chaque requête - voir
-api/telegram_auth.py. Aucune confiance n'est faite à un user_id envoyé tel
-quel par le client.
+Toutes les routes qui touchent au panier/à la roue/au VIP exigent un
+`initData` Telegram valide (header `X-Telegram-Init-Data`), revalidé à chaque
+requête - voir api/telegram_auth.py. Aucune confiance n'est faite à un
+user_id envoyé tel quel par le client.
 """
 
 from __future__ import annotations
@@ -15,7 +15,23 @@ from aiohttp import web
 import asyncpg
 
 from api.telegram_auth import InvalidInitData, validate_init_data
-from db.repository import CartError, CartItem, Product, create_order_from_cart, get_cart, list_products, remove_cart_item, upsert_cart_item
+from db.repository import (
+    CartError,
+    CartItem,
+    Product,
+    VipStatus,
+    WheelPrize,
+    create_order_from_cart,
+    get_cart,
+    get_today_spin,
+    get_vip_status,
+    list_active_vip_plans,
+    list_available_call_slots,
+    list_products,
+    remove_cart_item,
+    spin_wheel,
+    upsert_cart_item,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,6 +41,7 @@ routes = web.RouteTableDef()
 INIT_DATA_HEADER = "X-Telegram-Init-Data"
 GENERIC_ERROR_BODY = {"error": "Une erreur est survenue. Merci de réessayer plus tard."}
 UNAVAILABLE_BODY = {"error": "La boutique est momentanément indisponible. Réessaie dans quelques minutes."}
+VALID_CATEGORIES = {"photo", "call", "vip"}
 
 
 def _get_pool(request: web.Request) -> asyncpg.Pool:
@@ -60,6 +77,8 @@ def _serialize_product(product: Product) -> dict:
         "description": product.description,
         "price_cents": product.price_cents,
         "currency": product.currency,
+        "category": product.category,
+        "duration_minutes": product.duration_minutes,
     }
 
 
@@ -72,6 +91,10 @@ def _serialize_cart(items: list[CartItem]) -> dict:
                 "price_cents": item.price_cents,
                 "currency": item.currency,
                 "quantity": item.quantity,
+                "category": item.category,
+                "duration_minutes": item.duration_minutes,
+                "call_slot_id": item.call_slot_id,
+                "call_slot_start_at": item.call_slot_start_at.isoformat() if item.call_slot_start_at else None,
                 "subtotal_cents": item.subtotal_cents,
             }
             for item in items
@@ -80,14 +103,59 @@ def _serialize_cart(items: list[CartItem]) -> dict:
     }
 
 
+def _serialize_wheel_prize(prize: WheelPrize) -> dict:
+    return {
+        "label": prize.label,
+        "description": prize.description,
+        "kind": prize.kind,
+        "discount_percent": prize.discount_percent,
+    }
+
+
+def _serialize_vip_status(status: VipStatus) -> dict:
+    return {
+        "active": status.active,
+        "plan_name": status.plan_name,
+        "expires_at": status.expires_at.isoformat() if status.expires_at else None,
+    }
+
+
 @routes.get("/api/products")
 async def get_products(request: web.Request) -> web.Response:
     pool = _get_pool(request)
+    category = request.query.get("category")
+    if category is not None and category not in VALID_CATEGORIES:
+        return web.json_response({"error": "Catégorie invalide"}, status=400)
+
     try:
-        products = await list_products(pool)
+        products = await list_products(pool, category=category)
         return web.json_response([_serialize_product(p) for p in products])
     except Exception:
         logger.exception("Erreur lors de la récupération du catalogue")
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+
+@routes.get("/api/call-slots")
+async def get_call_slots(request: web.Request) -> web.Response:
+    pool = _get_pool(request)
+    duration_raw = request.query.get("duration")
+    try:
+        duration_minutes = int(duration_raw)
+        if duration_minutes <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return web.json_response({"error": "Paramètre duration (entier positif) requis"}, status=400)
+
+    try:
+        slots = await list_available_call_slots(pool, duration_minutes)
+        return web.json_response(
+            [
+                {"id": s.id, "start_at": s.start_at.isoformat(), "duration_minutes": s.duration_minutes}
+                for s in slots
+            ]
+        )
+    except Exception:
+        logger.exception("Erreur lors de la récupération des créneaux d'appel")
         return web.json_response(GENERIC_ERROR_BODY, status=500)
 
 
@@ -112,15 +180,19 @@ async def update_cart_item(request: web.Request) -> web.Response:
         body = await request.json()
         product_id = int(body["product_id"])
         quantity = int(body["quantity"])
+        call_slot_id_raw = body.get("call_slot_id")
+        call_slot_id = int(call_slot_id_raw) if call_slot_id_raw is not None else None
     except (KeyError, TypeError, ValueError):
-        return web.json_response({"error": "product_id et quantity (entiers) requis"}, status=400)
+        return web.json_response(
+            {"error": "product_id et quantity (entiers) requis, call_slot_id optionnel"}, status=400
+        )
 
     try:
-        await upsert_cart_item(pool, user_id, product_id, quantity)
+        await upsert_cart_item(pool, user_id, product_id, quantity, call_slot_id=call_slot_id)
         items = await get_cart(pool, user_id)
         return web.json_response(_serialize_cart(items))
     except asyncpg.ForeignKeyViolationError:
-        return web.json_response({"error": "Produit introuvable"}, status=404)
+        return web.json_response({"error": "Produit ou créneau introuvable"}, status=404)
     except Exception:
         logger.exception("Erreur lors de la mise à jour du panier pour user_id=%s", user_id)
         return web.json_response(GENERIC_ERROR_BODY, status=500)
@@ -145,11 +217,88 @@ async def delete_cart_item(request: web.Request) -> web.Response:
         return web.json_response(GENERIC_ERROR_BODY, status=500)
 
 
+@routes.get("/api/wheel/status")
+async def get_wheel_status(request: web.Request) -> web.Response:
+    user_id = _authenticate(request)
+    pool = _get_pool(request)
+    try:
+        prize = await get_today_spin(pool, user_id)
+        return web.json_response(
+            {"can_spin": prize is None, "prize": _serialize_wheel_prize(prize) if prize else None}
+        )
+    except Exception:
+        logger.exception("Erreur lors de la lecture du statut de la roue pour user_id=%s", user_id)
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+
+@routes.post("/api/wheel/spin")
+async def post_wheel_spin(request: web.Request) -> web.Response:
+    user_id = _authenticate(request)
+    pool = _get_pool(request)
+    bot: Bot = request.app["bot"]
+    admin_user_id = request.app.get("admin_user_id")
+
+    try:
+        prize = await spin_wheel(pool, user_id)
+    except CartError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception:
+        logger.exception("Erreur lors du tirage de la roue pour user_id=%s", user_id)
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+    if prize.kind == "manual" and admin_user_id:
+        try:
+            await bot.send_message(
+                admin_user_id,
+                f"🎡 User {user_id} a gagné à la roue : {prize.label}\n"
+                f"{prize.description}\nMerci de lui envoyer le contenu manuellement.",
+            )
+        except Exception:
+            logger.exception("Impossible de notifier l'admin du gain à la roue (user_id=%s)", user_id)
+
+    return web.json_response(_serialize_wheel_prize(prize))
+
+
+@routes.get("/api/vip/status")
+async def get_vip_status_route(request: web.Request) -> web.Response:
+    user_id = _authenticate(request)
+    pool = _get_pool(request)
+    try:
+        status = await get_vip_status(pool, user_id)
+        plans = await list_active_vip_plans(pool)
+        return web.json_response(
+            {
+                **_serialize_vip_status(status),
+                "plans": [
+                    {
+                        "id": p.id,
+                        "name": p.name,
+                        "price_cents": p.price_cents,
+                        "duration_days": p.duration_days,
+                        "description": p.description,
+                    }
+                    for p in plans
+                ],
+            }
+        )
+    except Exception:
+        logger.exception("Erreur lors de la récupération du statut VIP pour user_id=%s", user_id)
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+
+def _format_item_line(item: CartItem) -> str:
+    label = f"• {item.name} x{item.quantity} — {item.subtotal_cents / 100:.2f} {item.currency}"
+    if item.category == "call" and item.call_slot_start_at:
+        label += f" (créneau : {item.call_slot_start_at:%d/%m/%Y %H:%M} UTC)"
+    return label
+
+
 @routes.post("/api/checkout")
 async def checkout(request: web.Request) -> web.Response:
     user_id = _authenticate(request)
     pool = _get_pool(request)
     bot: Bot = request.app["bot"]
+    admin_user_id = request.app.get("admin_user_id")
 
     try:
         result = await create_order_from_cart(pool, user_id)
@@ -159,13 +308,16 @@ async def checkout(request: web.Request) -> web.Response:
         logger.exception("Erreur lors du checkout pour user_id=%s", user_id)
         return web.json_response(GENERIC_ERROR_BODY, status=500)
 
-    summary_lines = [f"✅ Commande #{result.order_id} confirmée !\n"]
+    summary_lines = [f"✅ Commande #{result.order_id} enregistrée !\n"]
     for item in result.items:
-        summary_lines.append(
-            f"• {item.name} x{item.quantity} — {item.subtotal_cents / 100:.2f} {item.currency}"
-        )
+        summary_lines.append(_format_item_line(item))
+    if result.discount_percent:
+        summary_lines.append(f"\nRéduction roue appliquée : -{result.discount_percent}%")
     summary_lines.append(f"\nTotal : {result.total_cents / 100:.2f} {result.currency}")
-    summary_lines.append("\nNous revenons vers toi rapidement pour la suite.")
+    summary_lines.append(
+        "\nAucun paiement en ligne pour l'instant : nous revenons vers toi rapidement "
+        "pour convenir du règlement."
+    )
 
     try:
         await bot.send_message(user_id, "\n".join(summary_lines))
@@ -174,10 +326,25 @@ async def checkout(request: web.Request) -> web.Response:
         # message ne doit pas faire échouer le checkout côté client.
         logger.exception("Impossible d'envoyer le récapitulatif de commande pour user_id=%s", user_id)
 
+    if admin_user_id:
+        admin_lines = [f"🛒 Nouvelle commande #{result.order_id} — user_id={user_id}\n"]
+        for item in result.items:
+            admin_lines.append(_format_item_line(item))
+        if result.discount_percent:
+            admin_lines.append(f"\nRéduction roue : -{result.discount_percent}%")
+        admin_lines.append(f"\nTotal : {result.total_cents / 100:.2f} {result.currency}")
+        admin_lines.append(f"\nUne fois le paiement reçu : /confirm {result.order_id}")
+        try:
+            await bot.send_message(admin_user_id, "\n".join(admin_lines))
+        except Exception:
+            logger.exception("Impossible de notifier l'admin de la commande #%s", result.order_id)
+
     return web.json_response(
         {
             "order_id": result.order_id,
             "total_cents": result.total_cents,
+            "original_total_cents": result.original_total_cents,
+            "discount_percent": result.discount_percent,
             "currency": result.currency,
         }
     )

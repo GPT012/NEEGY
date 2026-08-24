@@ -29,7 +29,7 @@ from aiohttp import web
 from api import webapp_routes
 from config import config
 from db.pool import close_pool, create_pool, describe_dsn
-from handlers import commands, menu
+from handlers import admin, commands, menu
 from middlewares.throttling import ThrottlingMiddleware
 from utils.logger import get_logger, setup_logging
 
@@ -48,9 +48,15 @@ BOT_COMMANDS = [
 def create_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher()
 
+    # Toujours présent (même None) : les handlers admin déclarent db_pool en
+    # paramètre, l'injection aiogram échouerait si la clé était absente du
+    # workflow_data (ex: mode polling local sans base connectée).
+    dispatcher["db_pool"] = None
+
     dispatcher.message.middleware(ThrottlingMiddleware())
     dispatcher.callback_query.middleware(ThrottlingMiddleware())
 
+    dispatcher.include_router(admin.router)
     dispatcher.include_router(commands.router)
     dispatcher.include_router(menu.router)
 
@@ -132,6 +138,10 @@ async def _on_app_startup(app: web.Application) -> None:
             "(la boutique restera indisponible). Paramètres reçus : %s",
             describe_dsn(config.database_url),
         )
+
+    # Propage le pool aux handlers aiogram (commandes admin), qui ne lisent
+    # pas l'objet aiohttp `app` mais le workflow_data du dispatcher.
+    app["dispatcher"]["db_pool"] = app["db_pool"]
 
 
 async def _on_app_cleanup(app: web.Application) -> None:
@@ -223,6 +233,8 @@ def run_webhook() -> None:
     # l'envoi du récapitulatif de commande — utilisés par api/webapp_routes.py.
     app["bot"] = bot
     app["bot_token"] = config.bot_token
+    app["admin_user_id"] = config.admin_user_id
+    app["dispatcher"] = dispatcher
     app.on_startup.append(_on_app_startup)
     app.on_cleanup.append(_on_app_cleanup)
 
