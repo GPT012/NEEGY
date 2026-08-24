@@ -121,3 +121,8 @@ CREATE TABLE IF NOT EXISTS wheel_spins (
 );
 
 CREATE INDEX IF NOT EXISTS idx_wheel_spins_user_id ON wheel_spins (user_id);
+
+-- Qui a commandé, et si le colis photo est parti.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name TEXT NULL;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS telegram_username TEXT NULL;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ NULL;

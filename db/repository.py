@@ -95,6 +95,17 @@ class OrderRecord:
     total_cents: int
     currency: str
     status: str
+    customer_name: str | None = None
+    telegram_username: str | None = None
+
+
+@dataclass(frozen=True)
+class ShipTask:
+    order_id: int
+    user_id: int
+    customer_name: str | None
+    telegram_username: str | None
+    items_label: str
 
 
 # --------------------------------------------------------------------------
@@ -276,7 +287,13 @@ async def remove_cart_item(pool: asyncpg.Pool, user_id: int, product_id: int) ->
 # --------------------------------------------------------------------------
 
 
-async def create_order_from_cart(pool: asyncpg.Pool, user_id: int) -> OrderResult:
+async def create_order_from_cart(
+    pool: asyncpg.Pool,
+    user_id: int,
+    *,
+    customer_name: str | None = None,
+    telegram_username: str | None = None,
+) -> OrderResult:
     """Transforme le panier courant en commande, puis vide le panier.
 
     Opération atomique : soit tout réussit (commande + articles créés, créneaux
@@ -335,14 +352,19 @@ async def create_order_from_cart(pool: asyncpg.Pool, user_id: int) -> OrderResul
 
             order_id = await connection.fetchval(
                 """
-                INSERT INTO orders (user_id, total_cents, currency, status, discount_percent)
-                VALUES ($1, $2, $3, 'pending', $4)
+                INSERT INTO orders (
+                    user_id, total_cents, currency, status, discount_percent,
+                    customer_name, telegram_username
+                )
+                VALUES ($1, $2, $3, 'pending', $4, $5, $6)
                 RETURNING id
                 """,
                 user_id,
                 total_cents,
                 currency,
                 discount_percent,
+                customer_name,
+                telegram_username,
             )
 
             for row, item in zip(rows, items):
@@ -573,7 +595,10 @@ async def activate_vip_for_order(pool: asyncpg.Pool, order_id: int) -> VipStatus
 
 async def get_order(pool: asyncpg.Pool, order_id: int) -> OrderRecord | None:
     row = await pool.fetchrow(
-        "SELECT id, user_id, total_cents, currency, status FROM orders WHERE id = $1",
+        """
+        SELECT id, user_id, total_cents, currency, status, customer_name, telegram_username
+        FROM orders WHERE id = $1
+        """,
         order_id,
     )
     if row is None:
@@ -584,6 +609,8 @@ async def get_order(pool: asyncpg.Pool, order_id: int) -> OrderRecord | None:
         total_cents=row["total_cents"],
         currency=row["currency"],
         status=row["status"],
+        customer_name=row["customer_name"],
+        telegram_username=row["telegram_username"],
     )
 
 
@@ -591,6 +618,72 @@ async def mark_order_paid(pool: asyncpg.Pool, order_id: int) -> bool:
     """Marque la commande comme payée. Retourne False si introuvable ou déjà traitée."""
     result = await pool.execute(
         "UPDATE orders SET status = 'paid' WHERE id = $1 AND status = 'pending'",
+        order_id,
+    )
+    return result.endswith(" 1")
+
+
+async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
+    """Commandes payées dont les photos n'ont pas encore été envoyées."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            o.id,
+            o.user_id,
+            o.customer_name,
+            o.telegram_username,
+            string_agg(
+                oi.product_name || CASE WHEN oi.quantity > 1 THEN ' x' || oi.quantity ELSE '' END,
+                ', '
+                ORDER BY oi.id
+            ) AS items_label
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+        JOIN products p ON p.id = oi.product_id
+        WHERE o.status = 'paid'
+          AND o.shipped_at IS NULL
+          AND p.category = 'photo'
+        GROUP BY o.id, o.user_id, o.customer_name, o.telegram_username
+        ORDER BY o.id
+        """
+    )
+    return [
+        ShipTask(
+            order_id=row["id"],
+            user_id=row["user_id"],
+            customer_name=row["customer_name"],
+            telegram_username=row["telegram_username"],
+            items_label=row["items_label"],
+        )
+        for row in rows
+    ]
+
+
+async def get_photo_items_label(pool: asyncpg.Pool, order_id: int) -> str | None:
+    label = await pool.fetchval(
+        """
+        SELECT string_agg(
+            oi.product_name || CASE WHEN oi.quantity > 1 THEN ' x' || oi.quantity ELSE '' END,
+            ', '
+            ORDER BY oi.id
+        )
+        FROM order_items oi
+        JOIN products p ON p.id = oi.product_id
+        WHERE oi.order_id = $1 AND p.category = 'photo'
+        """,
+        order_id,
+    )
+    return label
+
+
+async def mark_order_shipped(pool: asyncpg.Pool, order_id: int) -> bool:
+    """Marque le colis comme envoyé. Uniquement si la commande est payée et pas déjà partie."""
+    result = await pool.execute(
+        """
+        UPDATE orders
+        SET shipped_at = now()
+        WHERE id = $1 AND status = 'paid' AND shipped_at IS NULL
+        """,
         order_id,
     )
     return result.endswith(" 1")

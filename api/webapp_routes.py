@@ -9,6 +9,7 @@ user_id envoyé tel quel par le client.
 from __future__ import annotations
 
 import json
+from html import escape
 
 from aiogram import Bot
 from aiohttp import web
@@ -55,8 +56,8 @@ def _get_pool(request: web.Request) -> asyncpg.Pool:
     return pool
 
 
-def _authenticate(request: web.Request) -> int:
-    """Valide le header X-Telegram-Init-Data et retourne le user_id Telegram.
+def _authenticated_user(request: web.Request) -> dict:
+    """Valide le header X-Telegram-Init-Data et retourne le dict user Telegram.
 
     Lève web.HTTPUnauthorized si absent ou invalide.
     """
@@ -67,7 +68,12 @@ def _authenticate(request: web.Request) -> int:
     except InvalidInitData:
         logger.warning("Requête Mini App rejetée : initData invalide")
         raise web.HTTPUnauthorized(text="Unauthorized")
-    return int(user["id"])
+    return user
+
+
+def _authenticate(request: web.Request) -> int:
+    """Valide le header X-Telegram-Init-Data et retourne le user_id Telegram."""
+    return int(_authenticated_user(request)["id"])
 
 
 def _serialize_product(product: Product) -> dict:
@@ -286,6 +292,23 @@ async def get_vip_status_route(request: web.Request) -> web.Response:
         return web.json_response(GENERIC_ERROR_BODY, status=500)
 
 
+def _clip(value: object, max_len: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text[:max_len]
+
+
+def _who_label(name: str | None, username: str | None, user_id: int) -> str:
+    if username:
+        return f"@{escape(username)}"
+    if name:
+        return escape(name)
+    return f"user {user_id}"
+
+
 def _format_item_line(item: CartItem) -> str:
     label = f"• {item.name} x{item.quantity} — {item.subtotal_cents / 100:.2f} {item.currency}"
     if item.category == "call" and item.call_slot_start_at:
@@ -324,13 +347,21 @@ def _payment_message_lines(payment: dict) -> list[str]:
 
 @routes.post("/api/checkout")
 async def checkout(request: web.Request) -> web.Response:
-    user_id = _authenticate(request)
+    user = _authenticated_user(request)
+    user_id = int(user["id"])
     pool = _get_pool(request)
     bot: Bot = request.app["bot"]
     admin_user_id = request.app.get("admin_user_id")
+    customer_name = _clip(user.get("first_name"), 64)
+    telegram_username = _clip(user.get("username"), 32)
 
     try:
-        result = await create_order_from_cart(pool, user_id)
+        result = await create_order_from_cart(
+            pool,
+            user_id,
+            customer_name=customer_name,
+            telegram_username=telegram_username,
+        )
     except CartError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except Exception:
@@ -355,7 +386,8 @@ async def checkout(request: web.Request) -> web.Response:
         logger.exception("Impossible d'envoyer le récapitulatif de commande pour user_id=%s", user_id)
 
     if admin_user_id:
-        admin_lines = [f"🛒 Nouvelle commande #{result.order_id} — user_id={user_id}\n"]
+        who = _who_label(customer_name, telegram_username, user_id)
+        admin_lines = [f"🛒 #{result.order_id} — {who}\n"]
         for item in result.items:
             admin_lines.append(_format_item_line(item))
         if result.discount_percent:

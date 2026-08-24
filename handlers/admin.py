@@ -10,6 +10,7 @@ ADMIN_USER_ID n'est pas configuré, aucune commande admin ne se déclenche.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from html import escape
 
 import asyncpg
 from aiogram import Bot, F, Router
@@ -22,8 +23,11 @@ from db.repository import (
     create_call_slot,
     get_call_slot_for_order,
     get_order,
+    get_photo_items_label,
+    list_orders_to_ship,
     list_upcoming_call_slots,
     mark_order_paid,
+    mark_order_shipped,
 )
 from utils.logger import get_logger
 
@@ -36,6 +40,15 @@ GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Merci de réessayer plus tard.
 
 ADDSLOT_USAGE = "Usage : /addslot AAAA-MM-JJ HH:MM DURÉE_MIN (heure en UTC)\nEx: /addslot 2026-08-26 18:00 30"
 CONFIRM_USAGE = "Usage : /confirm ID_COMMANDE\nEx: /confirm 42"
+SHIP_USAGE = "Usage : /ship ID_COMMANDE\nEx: /ship 42"
+
+
+def _who(name: str | None, username: str | None, user_id: int) -> str:
+    if username:
+        return f"@{escape(username)}"
+    if name:
+        return escape(name)
+    return f"user {user_id}"
 
 
 @router.message(Command("addslot"))
@@ -155,7 +168,64 @@ async def handle_confirm(
             except Exception:
                 logger.exception("Impossible de notifier le client user_id=%s (commande confirmée)", order.user_id)
 
+        photo_label = await get_photo_items_label(db_pool, order_id)
+        if photo_label:
+            who = _who(order.customer_name, order.telegram_username, order.user_id)
+            summary_lines.append(f"→ À envoyer : {photo_label} — {who}")
+            summary_lines.append(f"/ship {order_id} quand c'est parti.")
+
         await message.answer("\n".join(summary_lines))
     except Exception:
         logger.exception("Erreur lors de la confirmation de la commande #%s", order_id)
         await message.answer(GENERIC_ERROR_MESSAGE)
+
+
+@router.message(Command("orders"))
+async def handle_orders(message: Message, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+
+    try:
+        tasks = await list_orders_to_ship(db_pool)
+    except Exception:
+        logger.exception("Erreur lors de la récupération des commandes à envoyer")
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+
+    if not tasks:
+        await message.answer("Rien à envoyer.")
+        return
+
+    lines = ["À envoyer :\n"]
+    for task in tasks:
+        who = _who(task.customer_name, task.telegram_username, task.user_id)
+        lines.append(f"#{task.order_id}  {task.items_label}  →  {who}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("ship"))
+async def handle_ship(
+    message: Message, command: CommandObject, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+
+    args = (command.args or "").split()
+    if len(args) != 1 or not args[0].isdigit():
+        await message.answer(SHIP_USAGE)
+        return
+    order_id = int(args[0])
+
+    try:
+        shipped = await mark_order_shipped(db_pool, order_id)
+    except Exception:
+        logger.exception("Erreur lors du marquage envoyé de la commande #%s", order_id)
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+
+    if shipped:
+        await message.answer(f"#{order_id} envoyée.")
+    else:
+        await message.answer(f"#{order_id} introuvable, pas encore payée, ou déjà envoyée.")

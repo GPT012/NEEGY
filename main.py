@@ -22,7 +22,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
+from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonWebApp, WebAppInfo
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
@@ -42,6 +42,15 @@ BOT_COMMANDS = [
     BotCommand(command="start", description="Démarrer / afficher le menu"),
     BotCommand(command="shop", description="Ouvrir la boutique"),
     BotCommand(command="help", description="Aide"),
+]
+
+ADMIN_BOT_COMMANDS = [
+    BotCommand(command="orders", description="À envoyer"),
+    BotCommand(command="ship", description="Marquer envoyé"),
+    BotCommand(command="confirm", description="Paiement reçu"),
+    BotCommand(command="slots", description="Créneaux d'appel"),
+    BotCommand(command="addslot", description="Ajouter un créneau"),
+    *BOT_COMMANDS,
 ]
 
 
@@ -112,6 +121,11 @@ async def _on_startup(bot: Bot) -> None:
     logger.info("Webhook configuré sur %s", config.webhook_url)
 
     await bot.set_my_commands(BOT_COMMANDS)
+    if config.admin_user_id:
+        await bot.set_my_commands(
+            ADMIN_BOT_COMMANDS,
+            scope=BotCommandScopeChat(chat_id=config.admin_user_id),
+        )
     await bot.set_chat_menu_button(
         menu_button=MenuButtonWebApp(
             text="Boutique",
