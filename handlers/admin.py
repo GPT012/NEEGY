@@ -14,8 +14,9 @@ from html import escape
 
 import asyncpg
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from config import config
 from db.repository import (
@@ -28,6 +29,11 @@ from db.repository import (
     list_upcoming_call_slots,
     mark_order_paid,
     mark_order_shipped,
+)
+from keyboards.admin import (
+    CALLBACK_PAY_PREFIX,
+    CALLBACK_SHIP_PREFIX,
+    shipped_keyboard,
 )
 from utils.logger import get_logger
 
@@ -49,6 +55,67 @@ def _who(name: str | None, username: str | None, user_id: int) -> str:
     if name:
         return escape(name)
     return f"user {user_id}"
+
+
+def _parse_order_callback(data: str | None, prefix: str) -> int | None:
+    if not data or not data.startswith(prefix):
+        return None
+    raw = data[len(prefix) :]
+    if not raw.isdigit():
+        return None
+    return int(raw)
+
+
+async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tuple[str, bool]:
+    """Enregistre le paiement. Retourne (texte admin, afficher le bouton Envoyé)."""
+    order = await get_order(db_pool, order_id)
+    if order is None:
+        return f"Commande #{order_id} introuvable.", False
+    if order.status != "pending":
+        return f"Commande #{order_id} déjà traitée (statut : {order.status}).", False
+
+    marked = await mark_order_paid(db_pool, order_id)
+    if not marked:
+        return f"Commande #{order_id} déjà traitée entre-temps.", False
+
+    summary_lines = [f"✅ Commande #{order_id} confirmée."]
+
+    vip_status = await activate_vip_for_order(db_pool, order_id)
+    if vip_status is not None:
+        summary_lines.append(f"→ VIP « {vip_status.plan_name} » activé jusqu'au {vip_status.expires_at:%d/%m/%Y}.")
+        try:
+            await bot.send_message(
+                order.user_id,
+                f"🎉 Ton abonnement VIP « {vip_status.plan_name} » est activé jusqu'au "
+                f"{vip_status.expires_at:%d/%m/%Y} !",
+            )
+        except Exception:
+            logger.exception("Impossible de notifier le client user_id=%s (VIP activé)", order.user_id)
+
+    call_slot = await get_call_slot_for_order(db_pool, order_id)
+    if call_slot is not None:
+        summary_lines.append(f"→ Appel confirmé pour le {call_slot.start_at:%d/%m/%Y %H:%M} UTC.")
+        try:
+            await bot.send_message(
+                order.user_id,
+                f"📞 Ton appel du {call_slot.start_at:%d/%m/%Y à %H:%M} UTC est confirmé !",
+            )
+        except Exception:
+            logger.exception("Impossible de notifier le client user_id=%s (appel confirmé)", order.user_id)
+
+    if vip_status is None and call_slot is None:
+        try:
+            await bot.send_message(order.user_id, f"✅ Ta commande #{order_id} est confirmée, merci !")
+        except Exception:
+            logger.exception("Impossible de notifier le client user_id=%s (commande confirmée)", order.user_id)
+
+    photo_label = await get_photo_items_label(db_pool, order_id)
+    if photo_label:
+        who = _who(order.customer_name, order.telegram_username, order.user_id)
+        summary_lines.append(f"→ À envoyer : {photo_label} — {who}")
+        return "\n".join(summary_lines), True
+
+    return "\n".join(summary_lines), False
 
 
 @router.message(Command("addslot"))
@@ -124,57 +191,11 @@ async def handle_confirm(
     order_id = int(args[0])
 
     try:
-        order = await get_order(db_pool, order_id)
-        if order is None:
-            await message.answer(f"Commande #{order_id} introuvable.")
-            return
-        if order.status != "pending":
-            await message.answer(f"Commande #{order_id} déjà traitée (statut : {order.status}).")
-            return
-
-        marked = await mark_order_paid(db_pool, order_id)
-        if not marked:
-            await message.answer(f"Commande #{order_id} déjà traitée entre-temps.")
-            return
-
-        summary_lines = [f"✅ Commande #{order_id} confirmée."]
-
-        vip_status = await activate_vip_for_order(db_pool, order_id)
-        if vip_status is not None:
-            summary_lines.append(f"→ VIP « {vip_status.plan_name} » activé jusqu'au {vip_status.expires_at:%d/%m/%Y}.")
-            try:
-                await bot.send_message(
-                    order.user_id,
-                    f"🎉 Ton abonnement VIP « {vip_status.plan_name} » est activé jusqu'au "
-                    f"{vip_status.expires_at:%d/%m/%Y} !",
-                )
-            except Exception:
-                logger.exception("Impossible de notifier le client user_id=%s (VIP activé)", order.user_id)
-
-        call_slot = await get_call_slot_for_order(db_pool, order_id)
-        if call_slot is not None:
-            summary_lines.append(f"→ Appel confirmé pour le {call_slot.start_at:%d/%m/%Y %H:%M} UTC.")
-            try:
-                await bot.send_message(
-                    order.user_id,
-                    f"📞 Ton appel du {call_slot.start_at:%d/%m/%Y à %H:%M} UTC est confirmé !",
-                )
-            except Exception:
-                logger.exception("Impossible de notifier le client user_id=%s (appel confirmé)", order.user_id)
-
-        if vip_status is None and call_slot is None:
-            try:
-                await bot.send_message(order.user_id, f"✅ Ta commande #{order_id} est confirmée, merci !")
-            except Exception:
-                logger.exception("Impossible de notifier le client user_id=%s (commande confirmée)", order.user_id)
-
-        photo_label = await get_photo_items_label(db_pool, order_id)
-        if photo_label:
-            who = _who(order.customer_name, order.telegram_username, order.user_id)
-            summary_lines.append(f"→ À envoyer : {photo_label} — {who}")
-            summary_lines.append(f"/ship {order_id} quand c'est parti.")
-
-        await message.answer("\n".join(summary_lines))
+        text, show_ship = await _confirm_payment(bot, db_pool, order_id)
+        await message.answer(
+            text,
+            reply_markup=shipped_keyboard(order_id) if show_ship else None,
+        )
     except Exception:
         logger.exception("Erreur lors de la confirmation de la commande #%s", order_id)
         await message.answer(GENERIC_ERROR_MESSAGE)
@@ -229,3 +250,63 @@ async def handle_ship(
         await message.answer(f"#{order_id} envoyée.")
     else:
         await message.answer(f"#{order_id} introuvable, pas encore payée, ou déjà envoyée.")
+
+
+async def _respond_admin_callback(
+    callback: CallbackQuery, text: str, markup=None, toast: str | None = None
+) -> None:
+    if toast:
+        await callback.answer(toast)
+    else:
+        await callback.answer()
+    if callback.message is None:
+        return
+    try:
+        await callback.message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.from_user.id == config.admin_user_id, F.data.startswith(CALLBACK_PAY_PREFIX))
+async def handle_pay_callback(
+    callback: CallbackQuery, bot: Bot, db_pool: asyncpg.Pool | None
+) -> None:
+    order_id = _parse_order_callback(callback.data, CALLBACK_PAY_PREFIX)
+    if order_id is None:
+        await callback.answer("Commande invalide.", show_alert=True)
+        return
+    if db_pool is None:
+        await callback.answer("Base indisponible.", show_alert=True)
+        return
+    try:
+        text, show_ship = await _confirm_payment(bot, db_pool, order_id)
+        await _respond_admin_callback(
+            callback,
+            text,
+            shipped_keyboard(order_id) if show_ship else None,
+            toast="Confirmé",
+        )
+    except Exception:
+        logger.exception("Erreur callback paiement commande #%s", order_id)
+        await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
+
+
+@router.callback_query(F.from_user.id == config.admin_user_id, F.data.startswith(CALLBACK_SHIP_PREFIX))
+async def handle_ship_callback(callback: CallbackQuery, db_pool: asyncpg.Pool | None) -> None:
+    order_id = _parse_order_callback(callback.data, CALLBACK_SHIP_PREFIX)
+    if order_id is None:
+        await callback.answer("Commande invalide.", show_alert=True)
+        return
+    if db_pool is None:
+        await callback.answer("Base indisponible.", show_alert=True)
+        return
+    try:
+        shipped = await mark_order_shipped(db_pool, order_id)
+    except Exception:
+        logger.exception("Erreur callback envoi commande #%s", order_id)
+        await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
+        return
+    if shipped:
+        await _respond_admin_callback(callback, f"#{order_id} envoyée.", toast="Envoyée")
+    else:
+        await callback.answer("Déjà envoyée, ou pas encore payée.", show_alert=True)

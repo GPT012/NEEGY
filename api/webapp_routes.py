@@ -33,6 +33,7 @@ from db.repository import (
     spin_wheel,
     upsert_cart_item,
 )
+from keyboards.admin import pay_received_keyboard
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -393,9 +394,12 @@ async def checkout(request: web.Request) -> web.Response:
         if result.discount_percent:
             admin_lines.append(f"\nRéduction roue : -{result.discount_percent}%")
         admin_lines.append(f"\nTotal : {result.total_cents / 100:.2f} {result.currency}")
-        admin_lines.append(f"\nUne fois le paiement reçu : /confirm {result.order_id}")
         try:
-            await bot.send_message(admin_user_id, "\n".join(admin_lines))
+            await bot.send_message(
+                admin_user_id,
+                "\n".join(admin_lines),
+                reply_markup=pay_received_keyboard(result.order_id),
+            )
         except Exception:
             logger.exception("Impossible de notifier l'admin de la commande #%s", result.order_id)
 
