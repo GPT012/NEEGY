@@ -49,6 +49,10 @@ html[data-theme="dark"] {
   -webkit-tap-highlight-color: transparent;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -612,6 +616,8 @@ html[data-theme="dark"] .badge {
   border-radius: 999px;
   font-family: inherit;
   font-weight: 650;
+  text-align: center;
+  text-decoration: none;
   cursor: pointer;
   transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
 }
@@ -1056,7 +1062,7 @@ html[data-theme="dark"] .slot-booked-label small {
   font-size: 13px;
   text-align: center;
   box-shadow: var(--shadow-float);
-  z-index: 30;
+  z-index: 50;
   animation: toast-in 0.28s ease both;
 }
 
@@ -1073,6 +1079,113 @@ html[data-theme="dark"] .slot-booked-label small {
     opacity: 1;
     transform: none;
   }
+}
+
+/* ------------------------------------------- Feuille de paiement */
+
+.pay-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  background: rgba(42, 20, 28, 0.42);
+}
+
+.pay-sheet[hidden] {
+  display: none;
+}
+
+.pay-card {
+  width: min(420px, 100%);
+  padding: 28px 22px 22px;
+  border-radius: 28px 28px 22px 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  border: 1px solid var(--line);
+}
+
+.pay-kicker {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gold-deep);
+}
+
+.pay-card h2 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .pay-card h2 {
+  color: var(--text);
+}
+
+.pay-total {
+  margin: 6px 0 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.pay-hint {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.pay-bank {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: var(--gold-soft);
+  border: 1px solid var(--gold-border);
+}
+
+.pay-bank-label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold-deep);
+}
+
+.pay-holder {
+  margin: 0 0 10px;
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.pay-iban {
+  display: block;
+  width: 100%;
+  padding: 12px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.pay-ref {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--hint);
+}
+
+.pay-card .btn-ghost {
+  margin-top: 12px;
 }
 
 /* ---------------------------------------------------- Barre d'onglets */

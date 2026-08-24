@@ -234,6 +234,9 @@ def run_webhook() -> None:
     app["bot"] = bot
     app["bot_token"] = config.bot_token
     app["admin_user_id"] = config.admin_user_id
+    app["paypal_url"] = config.paypal_url
+    app["bank_iban"] = config.bank_iban
+    app["bank_holder"] = config.bank_holder
     app["dispatcher"] = dispatcher
     app.on_startup.append(_on_app_startup)
     app.on_cleanup.append(_on_app_cleanup)

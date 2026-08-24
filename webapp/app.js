@@ -9,6 +9,15 @@
   const photoNoteEl = document.getElementById("photo-note");
   const callListEl = document.getElementById("call-list");
   const toastEl = document.getElementById("toast");
+  const paySheetEl = document.getElementById("pay-sheet");
+  const payHeadingEl = document.getElementById("pay-heading");
+  const payTotalEl = document.getElementById("pay-total");
+  const payPaypalEl = document.getElementById("pay-paypal");
+  const payBankEl = document.getElementById("pay-bank");
+  const payHolderEl = document.getElementById("pay-holder");
+  const payIbanCopyEl = document.getElementById("pay-iban-copy");
+  const payRefEl = document.getElementById("pay-ref");
+  const payDoneEl = document.getElementById("pay-done");
   const cartStripEl = document.getElementById("cart-strip");
   const shopBadgeEl = document.getElementById("shop-badge");
   const wheelStatusEl = document.getElementById("wheel-status-text");
@@ -496,33 +505,69 @@
     tg.MainButton.show();
   }
 
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const field = document.createElement("textarea");
+      field.value = text;
+      field.setAttribute("readonly", "");
+      field.style.position = "fixed";
+      field.style.opacity = "0";
+      document.body.appendChild(field);
+      field.select();
+      const ok = document.execCommand("copy");
+      field.remove();
+      return ok;
+    }
+  }
+
+  function openPaymentSheet(result) {
+    const payment = result.payment || {};
+    payHeadingEl.textContent = `Commande #${result.order_id}`;
+    payTotalEl.textContent = formatPrice(result.total_cents, result.currency);
+
+    if (payment.paypal_url) {
+      payPaypalEl.hidden = false;
+      payPaypalEl.href = payment.paypal_url;
+    } else {
+      payPaypalEl.hidden = true;
+      payPaypalEl.removeAttribute("href");
+    }
+
+    if (payment.bank_iban || payment.bank_holder) {
+      payBankEl.hidden = false;
+      payHolderEl.textContent = payment.bank_holder || "";
+      payHolderEl.hidden = !payment.bank_holder;
+      payIbanCopyEl.hidden = !payment.bank_iban;
+      payIbanCopyEl.textContent = payment.bank_iban || "";
+      payIbanCopyEl.dataset.iban = (payment.bank_iban || "").replace(/\s+/g, "");
+      payRefEl.textContent = payment.reference
+        ? `Libellé : ${payment.reference}`
+        : "";
+    } else {
+      payBankEl.hidden = true;
+    }
+
+    paySheetEl.hidden = false;
+    tg?.MainButton?.hide();
+  }
+
   async function handleCheckout() {
-    if (!tg) return;
-    tg.MainButton.showProgress(true);
+    tg?.MainButton?.showProgress?.(true);
     try {
       const result = await apiFetch("/api/checkout", { method: "POST" });
       cartByProduct = new Map();
       cartTotalCents = 0;
       renderShop();
-      tg.HapticFeedback?.notificationOccurred?.("success");
-      const discountLine = result.discount_percent
-        ? `\nRéduction appliquée : -${result.discount_percent}%`
-        : "";
-      tg.showPopup(
-        {
-          title: "Commande confirmée",
-          message:
-            `Commande #${result.order_id} · ${formatPrice(result.total_cents, result.currency)}` +
-            `${discountLine}\n\nLe récapitulatif t'attend dans le chat.`,
-          buttons: [{ type: "close" }],
-        },
-        () => tg.close()
-      );
+      tg?.HapticFeedback?.notificationOccurred?.("success");
+      openPaymentSheet(result);
     } catch (err) {
-      tg.HapticFeedback?.notificationOccurred?.("error");
+      tg?.HapticFeedback?.notificationOccurred?.("error");
       showToast(err.message);
     } finally {
-      tg.MainButton.hideProgress();
+      tg?.MainButton?.hideProgress?.();
     }
   }
 
@@ -693,6 +738,30 @@
     } else {
       applyTheme();
     }
+
+    payPaypalEl.addEventListener("click", (event) => {
+      const url = payPaypalEl.getAttribute("href");
+      if (!url) {
+        event.preventDefault();
+        return;
+      }
+      if (tg?.openLink) {
+        event.preventDefault();
+        tg.openLink(url);
+      }
+    });
+
+    payIbanCopyEl.addEventListener("click", async () => {
+      const iban = payIbanCopyEl.dataset.iban || payIbanCopyEl.textContent;
+      if (!iban) return;
+      const copied = await copyText(iban);
+      showToast(copied ? "IBAN copié" : "Impossible de copier", copied ? "success" : undefined);
+      tg?.HapticFeedback?.impactOccurred?.("light");
+    });
+
+    payDoneEl.addEventListener("click", () => {
+      paySheetEl.hidden = true;
+    });
 
     switchTab("shop");
 

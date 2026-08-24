@@ -66,6 +66,23 @@
     </main>
   </div>
 
+  <div id="pay-sheet" class="pay-sheet" hidden>
+    <div class="pay-card">
+      <p class="pay-kicker">Paiement</p>
+      <h2 id="pay-heading">Commande</h2>
+      <p id="pay-total" class="pay-total"></p>
+      <p class="pay-hint">PayPal ou virement. Indique le libellé pour qu’on retrouve ta commande.</p>
+      <a id="pay-paypal" class="btn btn-gold btn-block" hidden target="_blank" rel="noopener noreferrer">Payer avec PayPal</a>
+      <div id="pay-bank" class="pay-bank" hidden>
+        <p class="pay-bank-label">Virement</p>
+        <p id="pay-holder" class="pay-holder"></p>
+        <button type="button" id="pay-iban-copy" class="pay-iban"></button>
+        <p id="pay-ref" class="pay-ref"></p>
+      </div>
+      <button type="button" id="pay-done" class="btn btn-ghost btn-block">C’est noté</button>
+    </div>
+  </div>
+
   <p id="toast" class="toast" hidden></p>
 
   <nav class="tab-bar">

@@ -293,6 +293,35 @@ def _format_item_line(item: CartItem) -> str:
     return label
 
 
+def _payment_payload(request: web.Request) -> dict:
+    """Coordonnées affichées après commande. Aucune API de paiement."""
+    return {
+        "paypal_url": request.app.get("paypal_url"),
+        "bank_iban": request.app.get("bank_iban"),
+        "bank_holder": request.app.get("bank_holder"),
+        "reference": None,
+    }
+
+
+def _payment_message_lines(payment: dict) -> list[str]:
+    lines = ["\nPaiement — PayPal ou virement :"]
+    if payment.get("paypal_url"):
+        lines.append(f"\nPayPal :\n{payment['paypal_url']}")
+    holder = payment.get("bank_holder")
+    iban = payment.get("bank_iban")
+    if holder or iban:
+        lines.append("\nVirement :")
+        if holder:
+            lines.append(f"Nom : {holder}")
+        if iban:
+            lines.append(f"IBAN : {iban}")
+    if payment.get("reference"):
+        lines.append(f"Libellé : {payment['reference']}")
+    if not payment.get("paypal_url") and not iban:
+        lines.append("\nRéponds à ce message pour convenir du règlement.")
+    return lines
+
+
 @routes.post("/api/checkout")
 async def checkout(request: web.Request) -> web.Response:
     user_id = _authenticate(request)
@@ -314,10 +343,9 @@ async def checkout(request: web.Request) -> web.Response:
     if result.discount_percent:
         summary_lines.append(f"\nRéduction roue appliquée : -{result.discount_percent}%")
     summary_lines.append(f"\nTotal : {result.total_cents / 100:.2f} {result.currency}")
-    summary_lines.append(
-        "\nAucun paiement en ligne pour l'instant : nous revenons vers toi rapidement "
-        "pour convenir du règlement."
-    )
+    payment = _payment_payload(request)
+    payment["reference"] = f"NEEGY-{result.order_id}"
+    summary_lines.extend(_payment_message_lines(payment))
 
     try:
         await bot.send_message(user_id, "\n".join(summary_lines))
@@ -346,5 +374,6 @@ async def checkout(request: web.Request) -> web.Response:
             "original_total_cents": result.original_total_cents,
             "discount_percent": result.discount_percent,
             "currency": result.currency,
+            "payment": payment,
         }
     )
