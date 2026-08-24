@@ -16,6 +16,7 @@ injectée automatiquement par Railway (voir config.py).
 from __future__ import annotations
 
 import asyncio
+import hmac
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -51,6 +52,20 @@ def create_bot() -> Bot:
     )
 
 
+async def _safe_close_session(bot: Bot) -> None:
+    """Ferme la session HTTP du bot sans jamais lever d'exception au shutdown.
+
+    Filet de sécurité valable pour le polling comme pour le webhook : évite
+    les warnings de session non fermée à chaque redéploiement (Railway envoie
+    SIGTERM), même si la fermeture "normale" (gérée par aiogram/aiohttp) a
+    déjà eu lieu ou a échoué.
+    """
+    try:
+        await bot.session.close()
+    except Exception:
+        logger.exception("Erreur lors de la fermeture de la session du bot")
+
+
 async def run_polling() -> None:
     """Démarre le bot en mode polling (développement local)."""
     bot = create_bot()
@@ -59,9 +74,15 @@ async def run_polling() -> None:
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Démarrage en mode polling")
-        await dispatcher.start_polling(bot)
+        # handle_signals=True : aiogram intercepte SIGINT/SIGTERM et déclenche
+        # un arrêt propre. close_bot_session=True : bot.session.close() est
+        # appelé automatiquement à la fin du polling. (valeurs par défaut,
+        # explicitées ici pour rendre le comportement d'arrêt visible.)
+        await dispatcher.start_polling(bot, handle_signals=True, close_bot_session=True)
     finally:
-        await bot.session.close()
+        # Filet de sécurité : couvre aussi le cas où une exception survient
+        # avant même que start_polling ne soit atteint (ex: delete_webhook échoue).
+        await _safe_close_session(bot)
 
 
 async def _on_startup(bot: Bot) -> None:
@@ -74,18 +95,45 @@ async def _on_startup(bot: Bot) -> None:
 
 
 async def _on_shutdown(bot: Bot) -> None:
+    # Déclenché via app.on_cleanup (setup_application relie dispatcher.shutdown
+    # à aiohttp) : web.run_app gère SIGINT/SIGTERM par défaut (handle_signals=
+    # True) et appelle runner.cleanup() à l'arrêt, garantissant l'exécution de
+    # cette fonction à chaque redéploiement Railway.
     await bot.delete_webhook()
-    await bot.session.close()
+    await _safe_close_session(bot)
     logger.info("Webhook supprimé, bot arrêté proprement")
+
+
+@web.middleware
+async def webhook_secret_middleware(request: web.Request, handler) -> web.StreamResponse:
+    """Vérifie explicitement le secret du webhook, en temps constant.
+
+    Défense en profondeur : aiogram valide déjà ce header en interne
+    (SimpleRequestHandler + secrets.compare_digest), mais on le revalide ici
+    explicitement, avant même d'atteindre le dispatcher. La route /health
+    n'est pas concernée (chemin différent de WEBHOOK_PATH).
+    """
+    if request.path == config.webhook_path:
+        expected_token = config.webhook_secret_token or ""
+        received_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not expected_token or not hmac.compare_digest(received_token, expected_token):
+            logger.warning("Webhook rejeté : secret token absent ou invalide")
+            return web.Response(status=403)
+    return await handler(request)
+
+
+async def handle_health(request: web.Request) -> web.Response:
+    """Healthcheck non protégé, utilisé par Railway pour vérifier que le service est vivant."""
+    return web.json_response({"status": "ok"})
 
 
 def run_webhook() -> None:
     """Démarre le bot en mode webhook via un serveur aiohttp.
 
-    La vérification du header X-Telegram-Bot-Api-Secret-Token est assurée
-    nativement par aiogram (SimpleRequestHandler avec secret_token=...),
-    qui rejette toute requête avec un header absent ou invalide (401)
-    avant même d'atteindre le dispatcher.
+    Le header X-Telegram-Bot-Api-Secret-Token est vérifié à deux niveaux :
+    - explicitement ici via webhook_secret_middleware (hmac.compare_digest) ;
+    - nativement par aiogram (SimpleRequestHandler avec secret_token=...),
+      qui rejette aussi toute requête invalide (401).
     """
     bot = create_bot()
     dispatcher = create_dispatcher()
@@ -93,7 +141,9 @@ def run_webhook() -> None:
     dispatcher.startup.register(_on_startup)
     dispatcher.shutdown.register(_on_shutdown)
 
-    app = web.Application()
+    app = web.Application(middlewares=[webhook_secret_middleware])
+
+    app.router.add_get("/health", handle_health)
 
     webhook_handler = SimpleRequestHandler(
         dispatcher=dispatcher,
