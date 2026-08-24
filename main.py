@@ -99,9 +99,16 @@ async def _on_shutdown(bot: Bot) -> None:
     # à aiohttp) : web.run_app gère SIGINT/SIGTERM par défaut (handle_signals=
     # True) et appelle runner.cleanup() à l'arrêt, garantissant l'exécution de
     # cette fonction à chaque redéploiement Railway.
-    await bot.delete_webhook()
+    #
+    # Important : on NE supprime PAS le webhook ici volontairement. Lors d'un
+    # rolling deploy (Railway démarre le nouveau conteneur avant d'arrêter
+    # l'ancien), l'ancien conteneur peut s'arrêter *après* que le nouveau ait
+    # déjà réenregistré le webhook avec succès. Un delete_webhook() ici
+    # effacerait alors le webhook fraîchement configuré par le nouveau
+    # conteneur (race condition). Le prochain démarrage réenregistre de toute
+    # façon l'URL via set_webhook, donc rien à nettoyer explicitement ici.
     await _safe_close_session(bot)
-    logger.info("Webhook supprimé, bot arrêté proprement")
+    logger.info("Bot arrêté proprement (webhook laissé en place)")
 
 
 @web.middleware
