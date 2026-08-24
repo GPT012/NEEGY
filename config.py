@@ -53,6 +53,9 @@ class Config:
     webapp_host: str
     webapp_port: int
 
+    database_url: str | None
+    mini_app_url: str | None
+
     log_level: str
     log_file_path: str
 
@@ -63,6 +66,8 @@ def load_config() -> Config:
 
     webhook_secret_token = os.getenv("WEBHOOK_SECRET_TOKEN") or None
     webhook_url = os.getenv("WEBHOOK_URL") or None
+    database_url = os.getenv("DATABASE_URL") or None
+    mini_app_url = os.getenv("MINI_APP_URL") or None
 
     if use_webhook:
         if not webhook_secret_token:
@@ -72,6 +77,16 @@ def load_config() -> Config:
             )
         if not webhook_url:
             raise ConfigError("WEBHOOK_URL est requis quand USE_WEBHOOK=true.")
+        if not database_url:
+            raise ConfigError(
+                "DATABASE_URL est requis quand USE_WEBHOOK=true "
+                "(nécessaire pour le catalogue et le panier de la Mini App)."
+            )
+        if not mini_app_url:
+            raise ConfigError(
+                "MINI_APP_URL est requis quand USE_WEBHOOK=true "
+                "(URL publique HTTPS servant la Mini App, ex: https://<domaine>/webapp/)."
+            )
 
     return Config(
         bot_token=_get_required("BOT_TOKEN"),
@@ -83,6 +98,8 @@ def load_config() -> Config:
         # Railway (et d'autres PaaS à process persistant) injectent PORT
         # automatiquement ; WEBAPP_PORT reste utilisable en local/autres hébergeurs.
         webapp_port=_get_int("PORT", _get_int("WEBAPP_PORT", 8080)),
+        database_url=database_url,
+        mini_app_url=mini_app_url,
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         log_file_path=os.getenv("LOG_FILE_PATH", "logs/errors.log"),
     )

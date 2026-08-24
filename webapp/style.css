@@ -1,0 +1,134 @@
+/* Utilise les variables de thème injectées par Telegram pour s'adapter
+   automatiquement au mode clair/sombre de l'utilisateur. */
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 16px 16px 96px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--tg-theme-bg-color, #ffffff);
+  color: var(--tg-theme-text-color, #111111);
+}
+
+.header {
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--tg-theme-hint-color, #888888);
+  font-size: 14px;
+}
+
+.loading {
+  color: var(--tg-theme-hint-color, #888888);
+  text-align: center;
+  padding: 32px 0;
+}
+
+.product-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.product-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--tg-theme-secondary-bg-color, #f4f4f5);
+}
+
+.product-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.product-name {
+  font-weight: 600;
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.product-description {
+  font-size: 13px;
+  color: var(--tg-theme-hint-color, #888888);
+  margin: 0 0 6px;
+  line-height: 1.35;
+}
+
+.product-price {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tg-theme-link-color, #3390ec);
+}
+
+.qty-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.qty-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: none;
+  background: var(--tg-theme-button-color, #3390ec);
+  color: var(--tg-theme-button-text-color, #ffffff);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.qty-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.qty-value {
+  min-width: 20px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.add-btn {
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: none;
+  background: var(--tg-theme-button-color, #3390ec);
+  color: var(--tg-theme-button-text-color, #ffffff);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.error-banner {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #e05555;
+  color: #ffffff;
+  font-size: 13px;
+  text-align: center;
+}

@@ -17,20 +17,32 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
+from api import webapp_routes
 from config import config
+from db.pool import close_pool, create_pool
 from handlers import commands, menu
 from middlewares.throttling import ThrottlingMiddleware
 from utils.logger import get_logger, setup_logging
 
 setup_logging(config.log_level, config.log_file_path)
 logger = get_logger(__name__)
+
+WEBAPP_DIR = Path(__file__).parent / "webapp"
+
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Démarrer / afficher le menu"),
+    BotCommand(command="shop", description="Ouvrir la boutique"),
+    BotCommand(command="help", description="Aide"),
+]
 
 
 def create_dispatcher() -> Dispatcher:
@@ -93,6 +105,23 @@ async def _on_startup(bot: Bot) -> None:
     )
     logger.info("Webhook configuré sur %s", config.webhook_url)
 
+    await bot.set_my_commands(BOT_COMMANDS)
+    await bot.set_chat_menu_button(
+        menu_button=MenuButtonWebApp(
+            text="Boutique",
+            web_app=WebAppInfo(url=config.mini_app_url),
+        )
+    )
+    logger.info("Commandes et bouton menu (Mini App) configurés")
+
+
+async def _on_app_startup(app: web.Application) -> None:
+    app["db_pool"] = await create_pool(config.database_url)
+
+
+async def _on_app_cleanup(app: web.Application) -> None:
+    await close_pool(app.get("db_pool"))
+
 
 async def _on_shutdown(bot: Bot) -> None:
     # Déclenché via app.on_cleanup (setup_application relie dispatcher.shutdown
@@ -134,6 +163,16 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_webapp_index(request: web.Request) -> web.FileResponse:
+    """Sert explicitement index.html sur /webapp/.
+
+    aiohttp ne sert pas automatiquement index.html pour un accès de
+    dossier via add_static (403 par défaut) : il faut cette route dédiée,
+    enregistrée avant la route statique générique.
+    """
+    return web.FileResponse(WEBAPP_DIR / "index.html")
+
+
 def run_webhook() -> None:
     """Démarre le bot en mode webhook via un serveur aiohttp.
 
@@ -150,7 +189,20 @@ def run_webhook() -> None:
 
     app = web.Application(middlewares=[webhook_secret_middleware])
 
+    # Pool PostgreSQL (catalogue, panier, commandes) et accès au bot pour
+    # l'envoi du récapitulatif de commande — utilisés par api/webapp_routes.py.
+    app["bot"] = bot
+    app["bot_token"] = config.bot_token
+    app.on_startup.append(_on_app_startup)
+    app.on_cleanup.append(_on_app_cleanup)
+
     app.router.add_get("/health", handle_health)
+    app.add_routes(webapp_routes.routes)
+    # Route exacte sur "/webapp/" enregistrée avant add_static : voir
+    # handle_webapp_index pour l'explication (index.html non servi par défaut).
+    app.router.add_get("/webapp/", handle_webapp_index)
+    app.router.add_get("/webapp", lambda request: web.HTTPFound("/webapp/"))
+    app.router.add_static("/webapp/", path=WEBAPP_DIR, show_index=False)
 
     webhook_handler = SimpleRequestHandler(
         dispatcher=dispatcher,
