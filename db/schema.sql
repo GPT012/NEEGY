@@ -50,9 +50,6 @@ CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items (order_id);
 
 ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'photo';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NULL;
-ALTER TABLE products DROP CONSTRAINT IF EXISTS products_category_check;
-ALTER TABLE products ADD CONSTRAINT products_category_check
-    CHECK (category IN ('photo', 'call', 'vip'));
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_percent INTEGER NULL
     CHECK (discount_percent IS NULL OR (discount_percent > 0 AND discount_percent <= 100));
@@ -104,7 +101,7 @@ CREATE TABLE IF NOT EXISTS wheel_prizes (
     id               SERIAL PRIMARY KEY,
     label            TEXT NOT NULL,
     description      TEXT NOT NULL DEFAULT '',
-    kind             TEXT NOT NULL CHECK (kind IN ('manual', 'discount')),
+    kind             TEXT NOT NULL CHECK (kind IN ('manual', 'discount', 'points', 'photo', 'video', 'call')),
     discount_percent INTEGER NULL CHECK (discount_percent IS NULL OR (discount_percent > 0 AND discount_percent <= 100)),
     weight           INTEGER NOT NULL DEFAULT 1 CHECK (weight > 0),
     is_active        BOOLEAN NOT NULL DEFAULT TRUE
@@ -147,9 +144,6 @@ CREATE INDEX IF NOT EXISTS idx_client_folder_members_user_id
     ON client_folder_members (user_id);
 
 -- Points de la roue : 1 point = 1 €, utilisables en boutique.
-ALTER TABLE wheel_prizes DROP CONSTRAINT IF EXISTS wheel_prizes_kind_check;
-ALTER TABLE wheel_prizes ADD CONSTRAINT wheel_prizes_kind_check
-    CHECK (kind IN ('manual', 'discount', 'points'));
 ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS points_amount INTEGER NULL
     CHECK (points_amount IS NULL OR points_amount > 0);
 
