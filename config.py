@@ -87,6 +87,7 @@ class Config:
 
     database_url: str | None
     mini_app_url: str | None
+    mini_app_short_name: str | None
 
     admin_user_id: int | None
 
@@ -159,6 +160,7 @@ def load_config() -> Config:
         webapp_port=_get_int("PORT", _get_int("WEBAPP_PORT", 8080)),
         database_url=database_url,
         mini_app_url=mini_app_url,
+        mini_app_short_name=_get_str("MINI_APP_SHORT_NAME"),
         admin_user_id=admin_user_id,
         paypal_url=paypal_url,
         bank_iban=_get_str("BANK_IBAN") or "FR76 2823 3000 0106 8425 4424 364",

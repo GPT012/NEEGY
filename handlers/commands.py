@@ -1,11 +1,11 @@
-"""Handlers des commandes de base : /start, /help et /shop."""
+"""Handlers des commandes de base : /start, /help, /shop et /link."""
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
 from config import config
-from keyboards.main_menu import get_main_menu_keyboard
+from keyboards.main_menu import get_link_keyboard, get_main_menu_keyboard, mini_app_deep_link
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,10 +24,16 @@ HELP_MESSAGE = (
     "📖 Commandes disponibles :\n\n"
     "/start — Afficher le message de bienvenue et le menu\n"
     "/shop — Ouvrir la boutique (Mini App)\n"
+    "/link — Lien à coller dans tes conversations\n"
     "/help — Afficher ce message d'aide"
 )
 
 SHOP_MESSAGE = "🛍️ Clique ci-dessous pour ouvrir la boutique."
+
+LINK_INTRO = (
+    "Colle ce lien dans n'importe quelle conversation, "
+    "ou appuie sur Envoyer dans une conversation :\n\n"
+)
 
 
 @router.message(CommandStart())
@@ -60,6 +66,23 @@ async def handle_shop(message: Message) -> None:
         )
     except Exception:
         logger.exception("Erreur dans handle_shop pour user_id=%s", message.from_user.id if message.from_user else None)
+        await _safe_reply(message)
+
+
+@router.message(Command("link"))
+async def handle_link(message: Message, bot: Bot) -> None:
+    try:
+        me = await bot.get_me()
+        if not me.username:
+            await message.answer("Le bot n'a pas encore de nom d'utilisateur Telegram.")
+            return
+        link = mini_app_deep_link(me.username, config.mini_app_short_name)
+        await message.answer(
+            f"{LINK_INTRO}{link}",
+            reply_markup=get_link_keyboard(config.mini_app_url),
+        )
+    except Exception:
+        logger.exception("Erreur dans handle_link pour user_id=%s", message.from_user.id if message.from_user else None)
         await _safe_reply(message)
 
 

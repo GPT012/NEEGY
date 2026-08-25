@@ -34,6 +34,11 @@ class ThrottlingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
+        from aiogram.types import InlineQuery
+
+        if isinstance(event, InlineQuery):
+            return await handler(event, data)
+
         user_id = self._extract_user_id(event)
 
         if user_id is not None:

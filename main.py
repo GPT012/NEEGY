@@ -29,7 +29,7 @@ from aiohttp import web
 from api import webapp_routes
 from config import config
 from db.pool import close_pool, create_pool, describe_dsn
-from handlers import admin, commands, menu
+from handlers import admin, commands, inline, menu
 from middlewares.throttling import ThrottlingMiddleware
 from utils.logger import get_logger, setup_logging
 
@@ -41,6 +41,7 @@ WEBAPP_DIR = Path(__file__).parent / "webapp"
 BOT_COMMANDS = [
     BotCommand(command="start", description="Démarrer / afficher le menu"),
     BotCommand(command="shop", description="Ouvrir la boutique"),
+    BotCommand(command="link", description="Lien boutique à envoyer"),
     BotCommand(command="help", description="Aide"),
 ]
 
@@ -69,6 +70,7 @@ def create_dispatcher() -> Dispatcher:
 
     dispatcher.include_router(admin.router)
     dispatcher.include_router(commands.router)
+    dispatcher.include_router(inline.router)
     dispatcher.include_router(menu.router)
 
     return dispatcher
