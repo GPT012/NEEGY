@@ -239,6 +239,13 @@ CREATE TABLE IF NOT EXISTS reward_grants (
 CREATE INDEX IF NOT EXISTS idx_reward_grants_order_id ON reward_grants (order_id);
 CREATE INDEX IF NOT EXISTS idx_reward_grants_user_id ON reward_grants (user_id);
 
+-- Un fichier = une seule cliente (jamais le même média pour deux personnes).
+DELETE FROM reward_grants a
+ USING reward_grants b
+ WHERE a.asset_id = b.asset_id AND a.id > b.id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_grants_asset_once
+    ON reward_grants (asset_id);
+
 -- Simplification : une file photos + une file vidéos (au lieu de 6 slots).
 UPDATE reward_assets SET pool = 'photos'
  WHERE pool IN ('wheel5_photo', 'booster_10', 'booster_20', 'booster_30');

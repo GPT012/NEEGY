@@ -508,6 +508,7 @@ async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
         "Deux files seulement :\n"
         "• File photos → packs + lot photo de la roue Rose\n"
         "• File vidéos → lots vidéo Rose / Nuit\n"
+        "Chaque fichier n'est donné qu'à une seule cliente.\n"
         "Ajoute des fichiers, puis valide l'aperçu.\n",
     ]
     for name, total, unused in rows:

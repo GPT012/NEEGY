@@ -1017,10 +1017,10 @@ def _row_to_grant(row) -> RewardGrantRow:
 
 async def _pick_unused_assets(
     connection: asyncpg.Connection,
-    user_id: int,
     pool_name: str,
     count: int,
 ) -> list[RewardAsset]:
+    """Pioche des fichiers jamais donnés à personne (un média = une seule cliente)."""
     if count <= 0:
         return []
     rows = await connection.fetch(
@@ -1029,14 +1029,13 @@ async def _pick_unused_assets(
         FROM reward_assets a
         WHERE a.pool = $1 AND a.is_active = TRUE
           AND NOT EXISTS (
-              SELECT 1 FROM reward_grants g
-              WHERE g.asset_id = a.id AND g.user_id = $2
+              SELECT 1 FROM reward_grants g WHERE g.asset_id = a.id
           )
         ORDER BY random()
-        LIMIT $3
+        LIMIT $2
+        FOR UPDATE OF a SKIP LOCKED
         """,
         pool_name,
-        user_id,
         count,
     )
     return [_row_to_asset(row) for row in rows]
@@ -1050,26 +1049,30 @@ async def _grant_assets(
     count: int,
     source: str,
 ) -> tuple[list[RewardAsset], str | None]:
-    assets = await _pick_unused_assets(connection, user_id, pool_name, count)
+    assets = await _pick_unused_assets(connection, pool_name, count)
+    granted: list[RewardAsset] = []
     for asset in assets:
-        await connection.execute(
+        inserted = await connection.fetchval(
             """
             INSERT INTO reward_grants (user_id, asset_id, order_id, source)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id, asset_id) DO NOTHING
+            ON CONFLICT (asset_id) DO NOTHING
+            RETURNING id
             """,
             user_id,
             asset.id,
             order_id,
             source,
         )
+        if inserted is not None:
+            granted.append(asset)
     warning = None
-    if len(assets) < count:
+    if len(granted) < count:
         warning = (
             f"Stock insuffisant : pool {pool_name}, commande #{order_id} "
-            f"({len(assets)}/{count})."
+            f"({len(granted)}/{count})."
         )
-    return assets, warning
+    return granted, warning
 
 
 async def _book_prize_call_slot(
