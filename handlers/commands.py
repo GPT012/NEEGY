@@ -5,7 +5,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
 from config import config
-from keyboards.main_menu import get_link_keyboard, get_main_menu_keyboard, mini_app_deep_link
+from keyboards.main_menu import get_link_keyboard, get_main_menu_keyboard, mini_app_deep_link, user_is_admin
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +41,10 @@ async def handle_start(message: Message) -> None:
     try:
         await message.answer(
             WELCOME_MESSAGE,
-            reply_markup=get_main_menu_keyboard(mini_app_url=config.mini_app_url),
+            reply_markup=get_main_menu_keyboard(
+                mini_app_url=config.mini_app_url,
+                is_admin=user_is_admin(message.from_user),
+            ),
         )
     except Exception:
         logger.exception("Erreur dans handle_start pour user_id=%s", message.from_user.id if message.from_user else None)
@@ -62,7 +65,10 @@ async def handle_shop(message: Message) -> None:
     try:
         await message.answer(
             SHOP_MESSAGE,
-            reply_markup=get_main_menu_keyboard(mini_app_url=config.mini_app_url),
+            reply_markup=get_main_menu_keyboard(
+                mini_app_url=config.mini_app_url,
+                is_admin=user_is_admin(message.from_user),
+            ),
         )
     except Exception:
         logger.exception("Erreur dans handle_shop pour user_id=%s", message.from_user.id if message.from_user else None)

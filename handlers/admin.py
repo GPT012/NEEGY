@@ -62,7 +62,9 @@ from keyboards.admin import (
     stock_after_add_keyboard,
     stock_pools_keyboard,
     stock_preview_keyboard,
+    stock_waiting_keyboard,
 )
+from keyboards.main_menu import CALLBACK_SETTINGS
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -483,23 +485,68 @@ def _expected_kind_label(kind: str) -> str:
     return "une vidéo" if kind == "video" else "une photo"
 
 
-async def _send_stock_menu(message: Message, db_pool: asyncpg.Pool) -> None:
+async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
     rows = await list_reward_stock(db_pool)
     counts = {name: total for name, total, _unused in rows}
-    lines = ["Stock — choisis un slot, puis envoie le fichier.\n"]
+    lines = [
+        "⚙️ Paramètres — stock photos et vidéos\n",
+        "Clique un slot, envoie le fichier, puis valide l'aperçu.\n",
+    ]
     for name, total, unused in rows:
         lines.append(f"• {_pool_title(name)} — {total} fichier(s), {unused} jamais attribué(s)")
-    await message.answer("\n".join(lines), reply_markup=stock_pools_keyboard(counts))
+    return "\n".join(lines), stock_pools_keyboard(counts)
 
 
-async def _ask_for_stock_file(target: Message, state: FSMContext, pool_name: str) -> None:
+async def _send_stock_menu(message: Message, db_pool: asyncpg.Pool) -> None:
+    text, markup = await _stock_menu_content(db_pool)
+    await message.answer(text, reply_markup=markup)
+
+
+async def _show_stock_menu(message: Message, db_pool: asyncpg.Pool) -> None:
+    text, markup = await _stock_menu_content(db_pool)
+    try:
+        await message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest:
+        await message.answer(text, reply_markup=markup)
+
+
+async def _ask_for_stock_file(
+    target: Message, state: FSMContext, pool_name: str, *, edit: bool = False
+) -> None:
     kind = VALID_REWARD_POOLS[pool_name]
     await state.set_state(StockFSM.waiting_media)
     await state.update_data(pool=pool_name, kind=kind)
-    await target.answer(
+    text = (
         f"Envoie {_expected_kind_label(kind)} pour « {_pool_title(pool_name)} ».\n"
         "Tu verras un aperçu avant de l'ajouter."
     )
+    markup = stock_waiting_keyboard()
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=markup)
+            return
+        except TelegramBadRequest:
+            pass
+    await target.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data == CALLBACK_SETTINGS)
+async def handle_admin_settings(
+    callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    if db_pool is None:
+        await callback.answer("Base de données indisponible.", show_alert=True)
+        return
+    await state.clear()
+    try:
+        await _show_stock_menu(callback.message, db_pool)
+        await callback.answer()
+    except Exception:
+        logger.exception("Erreur paramètres stock")
+        await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
 
 
 @router.message(Command("stock"))
@@ -548,7 +595,7 @@ async def handle_stock_pool_pick(callback: CallbackQuery, state: FSMContext) -> 
         return
     await callback.answer()
     if callback.message:
-        await _ask_for_stock_file(callback.message, state, pool_name)
+        await _ask_for_stock_file(callback.message, state, pool_name, edit=True)
 
 
 @router.callback_query(F.data == CALLBACK_STOCK_MENU)
@@ -559,7 +606,7 @@ async def handle_stock_menu(
     await callback.answer()
     if db_pool is None or callback.message is None:
         return
-    await _send_stock_menu(callback.message, db_pool)
+    await _show_stock_menu(callback.message, db_pool)
 
 
 @router.callback_query(F.data == CALLBACK_STOCK_MORE)
@@ -571,7 +618,7 @@ async def handle_stock_more(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await callback.answer()
     if callback.message:
-        await _ask_for_stock_file(callback.message, state, pool_name)
+        await _ask_for_stock_file(callback.message, state, pool_name, edit=True)
 
 
 @router.message(StateFilter(StockFSM.waiting_media), F.photo | F.video)

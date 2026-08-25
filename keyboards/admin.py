@@ -4,6 +4,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from db.repository import REWARD_POOL_LABELS, VALID_REWARD_POOLS
+from keyboards.main_menu import CALLBACK_BACK
 
 CALLBACK_PAY_PREFIX = "adm:pay:"
 CALLBACK_SHIP_PREFIX = "adm:ship:"
@@ -56,6 +57,15 @@ def stock_pools_keyboard(counts: dict[str, int] | None = None) -> InlineKeyboard
             text=f"{label} · {n} {kind_mark}",
             callback_data=f"{CALLBACK_STOCK_POOL_PREFIX}{pool_name}",
         )
+    builder.button(text="⬅️ Retour au menu", callback_data=CALLBACK_BACK)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def stock_waiting_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬅️ Autre slot", callback_data=CALLBACK_STOCK_MENU)
+    builder.button(text="⬅️ Retour au menu", callback_data=CALLBACK_BACK)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -72,5 +82,6 @@ def stock_after_add_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Encore une dans ce slot", callback_data=CALLBACK_STOCK_MORE)
     builder.button(text="Autre slot", callback_data=CALLBACK_STOCK_MENU)
+    builder.button(text="⬅️ Retour au menu", callback_data=CALLBACK_BACK)
     builder.adjust(1)
     return builder.as_markup()
