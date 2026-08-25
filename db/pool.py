@@ -51,9 +51,9 @@ _SEED_VIP_PLAN = (
 
 # label, description, kind, discount_percent, weight, points_amount
 _SEED_WHEEL_PRIZES = [
-    ("+2 points", "Ajoutés à ton solde. 1 point = 1 € de boutique.", "points", None, 5, 2),
-    ("+4 points", "Ajoutés à ton solde. 1 point = 1 € de boutique.", "points", None, 4, 4),
-    ("+9 points", "Ajoutés à ton solde. 1 point = 1 € de boutique.", "points", None, 1, 9),
+    ("2", "C'est tombé.", "points", None, 5, 2),
+    ("4", "Un peu plus loin.", "points", None, 4, 4),
+    ("9", "Le rare.", "points", None, 1, 9),
 ]
 
 

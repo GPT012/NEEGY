@@ -801,22 +801,51 @@ html[data-theme="dark"] .slot-booked-label small {
 }
 
 .wheel {
+  position: relative;
   width: 100%;
   height: 100%;
   border-radius: 50%;
   border: 7px solid var(--surface);
   box-shadow: var(--shadow-float), 0 0 0 1px var(--gold-border);
   background: conic-gradient(
-    #4a2432 0deg 45deg,
-    var(--gold) 45deg 90deg,
-    #7a3048 90deg 135deg,
-    var(--gold-light) 135deg 180deg,
-    #4a2432 180deg 225deg,
-    #c0392b 225deg 270deg,
-    #7a3048 270deg 315deg,
-    var(--gold-light) 315deg 360deg
+    #4a2432 0deg 36deg,
+    var(--gold) 36deg 72deg,
+    #7a3048 72deg 108deg,
+    var(--gold-light) 108deg 144deg,
+    #4a2432 144deg 180deg,
+    #c0392b 180deg 216deg,
+    #7a3048 216deg 252deg,
+    var(--gold) 252deg 288deg,
+    #4a2432 288deg 324deg,
+    var(--gold-light) 324deg 360deg
   );
   transition: transform 3.4s cubic-bezier(0.12, 0.86, 0.08, 1);
+}
+
+.wheel-face {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  margin: -9px 0 0 -14px;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff7fa;
+  text-shadow: 0 1px 2px rgba(40, 10, 20, 0.45);
+  pointer-events: none;
+}
+
+.wheel-face-rare {
+  color: #fff4e8;
+  font-size: 18px;
+}
+
+.wheel-face-ink {
+  color: var(--ink);
+  text-shadow: none;
 }
 
 .wheel-hub {
@@ -863,15 +892,6 @@ html[data-theme="dark"] .slot-booked-label small {
   text-align: center;
 }
 
-.wheel-kicker {
-  margin: 0 0 8px;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--gold);
-}
-
 .wheel-status {
   margin: 0 0 20px;
   font-family: var(--font-serif);
@@ -879,25 +899,6 @@ html[data-theme="dark"] .slot-booked-label small {
   font-style: italic;
   line-height: 1.3;
   color: var(--text);
-}
-
-.points-balance {
-  margin: 0 0 6px;
-  font-family: var(--font-serif);
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--gold-deep);
-}
-
-.wheel-odds {
-  margin: 0 0 16px;
-  font-size: 12px;
-  color: var(--hint);
-}
-
-.wheel-prize {
-  font-style: normal;
-  font-weight: 700;
 }
 
 /* ------------------------------------------------------------- VIP */

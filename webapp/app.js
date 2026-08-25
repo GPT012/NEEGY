@@ -24,7 +24,7 @@
   const payDoneEl = document.getElementById("pay-done");
   const payPointsEl = document.getElementById("pay-points");
   const payPointsHintEl = document.getElementById("pay-points-hint");
-  const pointsBalanceEl = document.getElementById("points-balance");
+  const pointsBalanceEl = document.getElementById("wheel-hub");
   const cartStripEl = document.getElementById("cart-strip");
   const shopBadgeEl = document.getElementById("shop-badge");
   const wheelStatusEl = document.getElementById("wheel-status-text");
@@ -40,7 +40,7 @@
   };
   const pageMeta = {
     shop: { title: "Le deck", subtitle: "Choisis ton booster. Chaque pack a sa rareté." },
-    wheel: { title: "La roue", subtitle: "1 point = 1 €. 10 points paient un pack 10 €." },
+    wheel: { title: "La roue", subtitle: "Un tour. Ensuite, on verra." },
     vip: { title: "Le cercle", subtitle: "L'accès discret, sans ostentation." },
   };
   const BOOSTER_TIERS = [
@@ -53,7 +53,34 @@
     30: { rarity: "PSY", energy: "esprit" },
   };
 
+  const WHEEL_SLICES = [2, 4, 2, 4, 2, 9, 2, 4, 2, 4];
+  const WHEEL_GOLD_SLICES = new Set([1, 3, 7, 9]);
   const SPIN_DURATION_MS = 3400;
+
+  function paintWheel() {
+    if (!wheelGraphicEl) return;
+    wheelGraphicEl.innerHTML = "";
+    WHEEL_SLICES.forEach((points, index) => {
+      const face = document.createElement("span");
+      const classes = ["wheel-face"];
+      if (points === 9) classes.push("wheel-face-rare");
+      if (WHEEL_GOLD_SLICES.has(index)) classes.push("wheel-face-ink");
+      face.className = classes.join(" ");
+      const deg = index * 36 + 18;
+      face.style.transform = `rotate(${deg}deg) translateY(-82px)`;
+      face.textContent = String(points);
+      wheelGraphicEl.appendChild(face);
+    });
+  }
+
+  function sliceIndexForPoints(points) {
+    const matches = [];
+    WHEEL_SLICES.forEach((value, index) => {
+      if (value === Number(points)) matches.push(index);
+    });
+    if (!matches.length) return 0;
+    return matches[Math.floor(Math.random() * matches.length)];
+  }
 
   /** @type {Array<object>} */
   let photos = [];
@@ -533,8 +560,8 @@
 
   function setPointsBalance(balance) {
     if (!pointsBalanceEl) return;
-    const n = Number(balance) || 0;
-    pointsBalanceEl.textContent = `${n} pt${n === 1 ? "" : "s"}`;
+    const n = Number(balance);
+    pointsBalanceEl.textContent = Number.isFinite(n) ? String(n) : "·";
   }
 
   function openPaymentSheet(result) {
@@ -621,12 +648,11 @@
       const status = await apiFetch("/api/wheel/status");
       setPointsBalance(status.points_balance);
       if (status.can_spin) {
-        wheelStatusEl.innerHTML = "Tourne pour gagner 2, 4 ou 9 points.";
+        wheelStatusEl.textContent = "Personne ne sait ce qui va tomber.";
         wheelSpinBtn.disabled = false;
         wheelSpinBtn.textContent = "Tourner la roue";
       } else {
-        const label = status.prize ? escapeHtml(status.prize.label) : "des points";
-        wheelStatusEl.innerHTML = `Déjà tournée aujourd'hui — <span class="wheel-prize">${label}</span>. Reviens demain.`;
+        wheelStatusEl.textContent = "C'est joué pour aujourd'hui. Reviens demain.";
         wheelSpinBtn.textContent = "Reviens demain";
       }
     } catch (err) {
@@ -635,21 +661,22 @@
     }
   }
 
-  function animateSpin() {
-    // Plusieurs tours complets + un arrêt aléatoire : la position finale n'a
-    // pas de sens métier (le lot est tiré côté serveur), elle sert uniquement
-    // à rendre l'attente agréable.
-    wheelRotation += 4 * 360 + Math.floor(Math.random() * 360);
+  function animateSpinTo(points) {
+    const index = sliceIndexForPoints(points);
+    const jitter = (Math.random() - 0.5) * 16;
+    const target = (342 - index * 36 + jitter + 360) % 360;
+    const current = ((wheelRotation % 360) + 360) % 360;
+    let delta = (target - current + 360) % 360;
+    if (delta < 80) delta += 360;
+    wheelRotation += 4 * 360 + delta;
     wheelGraphicEl.style.transform = `rotate(${wheelRotation}deg)`;
   }
 
   wheelSpinBtn.addEventListener("click", async () => {
     wheelSpinBtn.disabled = true;
-    wheelStatusEl.textContent = "La roue tourne…";
-    animateSpin();
+    wheelStatusEl.textContent = "Encore un instant.";
     tg?.HapticFeedback?.impactOccurred?.("medium");
 
-    const startedAt = Date.now();
     let prize;
     try {
       prize = await apiFetch("/api/wheel/spin", { method: "POST" });
@@ -659,18 +686,19 @@
       return;
     }
 
-    const remaining = Math.max(0, SPIN_DURATION_MS - (Date.now() - startedAt));
-    await new Promise((resolve) => setTimeout(resolve, remaining));
+    animateSpinTo(prize.points_amount);
+    await new Promise((resolve) => setTimeout(resolve, SPIN_DURATION_MS + 280));
 
     tg?.HapticFeedback?.notificationOccurred?.("success");
     if (typeof prize.points_balance === "number") setPointsBalance(prize.points_balance);
-    const message = prize.points_amount
-      ? `+${prize.points_amount} points\n\n${prize.description}`
-      : `${prize.label}\n\n${prize.description}`;
     if (tg?.showPopup) {
-      tg.showPopup({ title: "Gagné", message, buttons: [{ type: "close" }] });
+      tg.showPopup({
+        title: prize.label || String(prize.points_amount || ""),
+        message: prize.description || "C'est tombé.",
+        buttons: [{ type: "close" }],
+      });
     } else {
-      showToast(prize.label, "success");
+      showToast(prize.description || prize.label, "success");
     }
     await refreshWheelStatus();
   });
@@ -873,6 +901,7 @@
       if (cryptoSheetEl) cryptoSheetEl.hidden = true;
     });
 
+    paintWheel();
     switchTab("shop");
 
     try {
