@@ -23,7 +23,9 @@ from db.repository import (
     VipStatus,
     WheelPrize,
     create_order_from_cart,
+    customer_note_lines,
     get_cart,
+    get_customer_snapshot,
     get_today_spin,
     get_vip_status,
     list_active_vip_plans,
@@ -388,7 +390,16 @@ async def checkout(request: web.Request) -> web.Response:
 
     if admin_user_id:
         who = _who_label(customer_name, telegram_username, user_id)
-        admin_lines = [f"🛒 #{result.order_id} — {who}\n"]
+        admin_lines = [f"🛒 #{result.order_id} — {who}"]
+        try:
+            snapshot = await get_customer_snapshot(pool, user_id, current_order_id=result.order_id)
+            notes = customer_note_lines(snapshot)
+            if notes:
+                admin_lines.append("")
+                admin_lines.extend(escape(note) for note in notes)
+        except Exception:
+            logger.exception("Impossible de charger le profil cliente pour user_id=%s", user_id)
+        admin_lines.append("")
         for item in result.items:
             admin_lines.append(_format_item_line(item))
         if result.discount_percent:

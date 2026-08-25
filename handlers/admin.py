@@ -22,14 +22,18 @@ from config import config
 from db.repository import (
     activate_vip_for_order,
     create_call_slot,
+    customer_hint_suffix,
     get_call_slot_for_order,
     get_order,
     get_photo_items_label,
+    list_client_folders,
     list_orders_to_ship,
     list_pending_orders,
     list_upcoming_call_slots,
     mark_order_paid,
     mark_order_shipped,
+    tag_user,
+    untag_user,
 )
 from keyboards.admin import (
     CALLBACK_PAY_PREFIX,
@@ -49,6 +53,15 @@ GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Merci de réessayer plus tard.
 ADDSLOT_USAGE = "Usage : /addslot AAAA-MM-JJ HH:MM DURÉE_MIN (heure en UTC)\nEx: /addslot 2026-08-26 18:00 30"
 CONFIRM_USAGE = "Usage : /confirm ID_COMMANDE\nEx: /confirm 42"
 SHIP_USAGE = "Usage : /ship ID_COMMANDE\nEx: /ship 42"
+TAG_USAGE = "Usage : /tag ID_COMMANDE dossier\nEx: /tag 12 proches"
+UNTAG_USAGE = "Usage : /untag ID_COMMANDE dossier\nEx: /untag 12 proches"
+
+
+def _normalize_folder_name(raw: str) -> str | None:
+    name = " ".join(raw.split())
+    if not name or len(name) > 32:
+        return None
+    return name
 
 
 def _who(name: str | None, username: str | None, user_id: int) -> str:
@@ -68,7 +81,8 @@ def _is_orders_inbox(callback: CallbackQuery) -> bool:
 
 def _task_line(task) -> str:
     who = _who(task.customer_name, task.telegram_username, task.user_id)
-    return f"#{task.order_id}  {escape(task.items_label)}  →  {who}"
+    suffix = escape(customer_hint_suffix(task))
+    return f"#{task.order_id}  {escape(task.items_label)}  →  {who}{suffix}"
 
 
 async def _orders_inbox(db_pool: asyncpg.Pool) -> tuple[str, object]:
@@ -277,6 +291,87 @@ async def handle_ship(
         await message.answer(f"#{order_id} envoyée.")
     else:
         await message.answer(f"#{order_id} introuvable, pas encore payée, ou déjà envoyée.")
+
+
+@router.message(Command("tag"))
+async def handle_tag(
+    message: Message, command: CommandObject, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+    args = (command.args or "").split(maxsplit=1)
+    if len(args) != 2 or not args[0].isdigit():
+        await message.answer(TAG_USAGE)
+        return
+    folder = _normalize_folder_name(args[1])
+    if folder is None:
+        await message.answer("Nom de dossier vide ou trop long (max 32 caractères).")
+        return
+    order_id = int(args[0])
+    try:
+        order = await get_order(db_pool, order_id)
+        if order is None:
+            await message.answer(f"Commande #{order_id} introuvable.")
+            return
+        name = await tag_user(db_pool, order.user_id, folder)
+        who = _who(order.customer_name, order.telegram_username, order.user_id)
+        await message.answer(f"{who} → dossier « {escape(name)} ».")
+    except Exception:
+        logger.exception("Erreur /tag commande #%s", order_id)
+        await message.answer(GENERIC_ERROR_MESSAGE)
+
+
+@router.message(Command("untag"))
+async def handle_untag(
+    message: Message, command: CommandObject, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+    args = (command.args or "").split(maxsplit=1)
+    if len(args) != 2 or not args[0].isdigit():
+        await message.answer(UNTAG_USAGE)
+        return
+    folder = _normalize_folder_name(args[1])
+    if folder is None:
+        await message.answer("Nom de dossier vide ou trop long (max 32 caractères).")
+        return
+    order_id = int(args[0])
+    try:
+        order = await get_order(db_pool, order_id)
+        if order is None:
+            await message.answer(f"Commande #{order_id} introuvable.")
+            return
+        removed = await untag_user(db_pool, order.user_id, folder)
+        who = _who(order.customer_name, order.telegram_username, order.user_id)
+        if removed:
+            await message.answer(f"{who} retirée de « {escape(folder)} ».")
+        else:
+            await message.answer(f"{who} n'était pas dans « {escape(folder)} ».")
+    except Exception:
+        logger.exception("Erreur /untag commande #%s", order_id)
+        await message.answer(GENERIC_ERROR_MESSAGE)
+
+
+@router.message(Command("folders"))
+async def handle_folders(message: Message, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+    try:
+        folders = await list_client_folders(db_pool)
+    except Exception:
+        logger.exception("Erreur /folders")
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+    if not folders:
+        await message.answer("Aucun dossier. Ajoute quelqu'un avec /tag 12 proches.")
+        return
+    lines = ["Dossiers :\n"]
+    for folder in folders:
+        lines.append(f"• {escape(folder.name)} ({folder.member_count})")
+    await message.answer("\n".join(lines))
 
 
 async def _respond_admin_callback(

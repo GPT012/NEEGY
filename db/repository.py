@@ -106,6 +106,24 @@ class ShipTask:
     customer_name: str | None
     telegram_username: str | None
     items_label: str
+    is_first_order: bool = False
+    folders: tuple[str, ...] = ()
+    is_vip: bool = False
+
+
+@dataclass(frozen=True)
+class CustomerSnapshot:
+    is_first_order: bool
+    paid_count: int
+    previous_products: tuple[str, ...]
+    folders: tuple[str, ...]
+    vip_plan: str | None
+
+
+@dataclass(frozen=True)
+class FolderSummary:
+    name: str
+    member_count: int
 
 
 # --------------------------------------------------------------------------
@@ -657,7 +675,7 @@ async def list_pending_orders(pool: asyncpg.Pool) -> list[ShipTask]:
         ORDER BY o.id
         """
     )
-    return _rows_to_ship_tasks(rows)
+    return await _enrich_ship_tasks(pool, _rows_to_ship_tasks(rows))
 
 
 async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
@@ -684,7 +702,7 @@ async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
         ORDER BY o.id
         """
     )
-    return _rows_to_ship_tasks(rows)
+    return await _enrich_ship_tasks(pool, _rows_to_ship_tasks(rows))
 
 
 async def get_photo_items_label(pool: asyncpg.Pool, order_id: int) -> str | None:
@@ -715,6 +733,186 @@ async def mark_order_shipped(pool: asyncpg.Pool, order_id: int) -> bool:
         order_id,
     )
     return result.endswith(" 1")
+
+
+async def _enrich_ship_tasks(pool: asyncpg.Pool, tasks: list[ShipTask]) -> list[ShipTask]:
+    if not tasks:
+        return tasks
+    user_ids = list({task.user_id for task in tasks})
+    count_rows = await pool.fetch(
+        """
+        SELECT user_id, COUNT(*)::int AS order_count
+        FROM orders
+        WHERE user_id = ANY($1::bigint[])
+        GROUP BY user_id
+        """,
+        user_ids,
+    )
+    counts = {row["user_id"]: row["order_count"] for row in count_rows}
+
+    folder_map: dict[int, list[str]] = {user_id: [] for user_id in user_ids}
+    folder_rows = await pool.fetch(
+        """
+        SELECT m.user_id, f.name
+        FROM client_folder_members m
+        JOIN client_folders f ON f.id = m.folder_id
+        WHERE m.user_id = ANY($1::bigint[])
+        ORDER BY f.name
+        """,
+        user_ids,
+    )
+    for row in folder_rows:
+        folder_map.setdefault(row["user_id"], []).append(row["name"])
+
+    vip_rows = await pool.fetch(
+        """
+        SELECT DISTINCT vs.user_id
+        FROM vip_subscriptions vs
+        WHERE vs.user_id = ANY($1::bigint[])
+          AND vs.status = 'active'
+          AND vs.expires_at > now()
+        """,
+        user_ids,
+    )
+    vip_users = {row["user_id"] for row in vip_rows}
+
+    return [
+        ShipTask(
+            order_id=task.order_id,
+            user_id=task.user_id,
+            customer_name=task.customer_name,
+            telegram_username=task.telegram_username,
+            items_label=task.items_label,
+            is_first_order=counts.get(task.user_id, 1) <= 1,
+            folders=tuple(folder_map.get(task.user_id, [])),
+            is_vip=task.user_id in vip_users,
+        )
+        for task in tasks
+    ]
+
+
+async def get_customer_snapshot(
+    pool: asyncpg.Pool, user_id: int, current_order_id: int | None = None
+) -> CustomerSnapshot:
+    total = await pool.fetchval("SELECT COUNT(*)::int FROM orders WHERE user_id = $1", user_id) or 0
+    paid_count = await pool.fetchval(
+        """
+        SELECT COUNT(*)::int FROM orders
+        WHERE user_id = $1 AND status = 'paid' AND id IS DISTINCT FROM $2
+        """,
+        user_id,
+        current_order_id,
+    ) or 0
+    product_rows = await pool.fetch(
+        """
+        SELECT DISTINCT oi.product_name
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.user_id = $1 AND o.status = 'paid' AND o.id IS DISTINCT FROM $2
+        ORDER BY oi.product_name
+        """,
+        user_id,
+        current_order_id,
+    )
+    folder_rows = await pool.fetch(
+        """
+        SELECT f.name
+        FROM client_folder_members m
+        JOIN client_folders f ON f.id = m.folder_id
+        WHERE m.user_id = $1
+        ORDER BY f.name
+        """,
+        user_id,
+    )
+    vip = await get_vip_status(pool, user_id)
+    return CustomerSnapshot(
+        is_first_order=total <= 1,
+        paid_count=paid_count,
+        previous_products=tuple(row["product_name"] for row in product_rows),
+        folders=tuple(row["name"] for row in folder_rows),
+        vip_plan=vip.plan_name if vip.active else None,
+    )
+
+
+def customer_note_lines(snapshot: CustomerSnapshot) -> list[str]:
+    lines: list[str] = []
+    if snapshot.is_first_order:
+        lines.append("Première commande")
+    else:
+        label = "commande payée" if snapshot.paid_count == 1 else "commandes payées"
+        lines.append(f"Déjà {snapshot.paid_count} {label}")
+        if snapshot.previous_products:
+            lines.append("Déjà : " + ", ".join(snapshot.previous_products[:6]))
+    if snapshot.folders:
+        lines.append("Dossiers : " + ", ".join(snapshot.folders))
+    if snapshot.vip_plan:
+        lines.append(f"VIP : {snapshot.vip_plan}")
+    return lines
+
+
+def customer_hint_suffix(task: ShipTask) -> str:
+    bits: list[str] = []
+    if task.is_first_order:
+        bits.append("1re")
+    bits.extend(task.folders)
+    if task.is_vip:
+        bits.append("VIP")
+    if not bits:
+        return ""
+    return " · " + ", ".join(bits)
+
+
+async def tag_user(pool: asyncpg.Pool, user_id: int, folder_name: str) -> str:
+    """Ajoute la cliente au dossier (créé si besoin). Retourne le nom du dossier."""
+    row = await pool.fetchrow(
+        "SELECT id, name FROM client_folders WHERE lower(name) = lower($1)",
+        folder_name,
+    )
+    if row is None:
+        folder_id = await pool.fetchval(
+            "INSERT INTO client_folders (name) VALUES ($1) RETURNING id",
+            folder_name,
+        )
+        name = folder_name
+    else:
+        folder_id = row["id"]
+        name = row["name"]
+    await pool.execute(
+        """
+        INSERT INTO client_folder_members (folder_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        """,
+        folder_id,
+        user_id,
+    )
+    return name
+
+
+async def untag_user(pool: asyncpg.Pool, user_id: int, folder_name: str) -> bool:
+    result = await pool.execute(
+        """
+        DELETE FROM client_folder_members m
+        USING client_folders f
+        WHERE m.folder_id = f.id AND m.user_id = $1 AND lower(f.name) = lower($2)
+        """,
+        user_id,
+        folder_name,
+    )
+    return result.endswith(" 1")
+
+
+async def list_client_folders(pool: asyncpg.Pool) -> list[FolderSummary]:
+    rows = await pool.fetch(
+        """
+        SELECT f.name, COUNT(m.user_id)::int AS member_count
+        FROM client_folders f
+        LEFT JOIN client_folder_members m ON m.folder_id = f.id
+        GROUP BY f.id, f.name
+        ORDER BY f.name
+        """
+    )
+    return [FolderSummary(name=row["name"], member_count=row["member_count"]) for row in rows]
 
 
 async def get_call_slot_for_order(pool: asyncpg.Pool, order_id: int) -> CallSlot | None:

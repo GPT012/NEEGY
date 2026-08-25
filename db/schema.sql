@@ -126,3 +126,22 @@ CREATE INDEX IF NOT EXISTS idx_wheel_spins_user_id ON wheel_spins (user_id);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name TEXT NULL;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS telegram_username TEXT NULL;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ NULL;
+
+-- Dossiers clients (étiquettes créées par l'admin, ex: proches, VIP photos).
+CREATE TABLE IF NOT EXISTS client_folders (
+    id         SERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_client_folders_name_lower
+    ON client_folders (lower(name));
+
+CREATE TABLE IF NOT EXISTS client_folder_members (
+    folder_id INTEGER NOT NULL REFERENCES client_folders(id) ON DELETE CASCADE,
+    user_id   BIGINT NOT NULL,
+    PRIMARY KEY (folder_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_folder_members_user_id
+    ON client_folder_members (user_id);

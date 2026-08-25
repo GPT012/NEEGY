@@ -46,6 +46,8 @@ BOT_COMMANDS = [
 
 ADMIN_BOT_COMMANDS = [
     BotCommand(command="orders", description="À envoyer"),
+    BotCommand(command="tag", description="Mettre dans un dossier"),
+    BotCommand(command="folders", description="Liste des dossiers"),
     BotCommand(command="ship", description="Marquer envoyé"),
     BotCommand(command="confirm", description="Paiement reçu"),
     BotCommand(command="slots", description="Créneaux d'appel"),
