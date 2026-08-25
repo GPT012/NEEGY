@@ -187,11 +187,15 @@ CREATE TABLE IF NOT EXISTS wheels (
 
 ALTER TABLE products DROP CONSTRAINT IF EXISTS products_category_check;
 ALTER TABLE products ADD CONSTRAINT products_category_check
-    CHECK (category IN ('photo', 'call', 'vip', 'wheel'));
+    CHECK (category IN ('photo', 'call', 'vip', 'wheel', 'video'));
 ALTER TABLE products ADD COLUMN IF NOT EXISTS reward_count INTEGER NULL
     CHECK (reward_count IS NULL OR reward_count > 0);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS wheel_id INTEGER NULL
     REFERENCES wheels(id);
+
+-- VIP retiré de la boutique (tables conservées pour l'historique).
+UPDATE products SET is_active = FALSE WHERE category = 'vip';
+
 
 ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS wheel_id INTEGER NULL
     REFERENCES wheels(id);

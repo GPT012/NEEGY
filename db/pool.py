@@ -30,24 +30,16 @@ _FATAL_CONNECT_ERRORS = (
 
 _LEGACY_PRODUCT_NAMES = ("Audit rapide", "Accompagnement mensuel", "Formation express")
 
-_SEED_PHOTOS = [
-    ("Pack Découverte", "Une sélection de 3 photos.", 1000, "EUR", 3),
-    ("Pack Complet", "Une sélection de 8 photos, plusieurs styles.", 2000, "EUR", 8),
-    ("Pack Exclusif", "La sélection la plus complète, contenu inédit.", 3000, "EUR", 12),
+# name, description, price_cents, currency, category (photo|video)
+_SEED_MEDIA = [
+    ("Photo", "Une photo exclusive, envoyée dès le paiement.", 1000, "EUR", "photo"),
+    ("Vidéo", "Une vidéo exclusive, envoyée dès le paiement.", 2000, "EUR", "video"),
 ]
 
 _SEED_CALLS = [
     ("Appel 15 minutes", "Appel vidéo/audio en tête-à-tête, 15 minutes.", 7000, "EUR", 15),
     ("Appel 30 minutes", "Appel vidéo/audio en tête-à-tête, 30 minutes.", 12000, "EUR", 30),
 ]
-
-# name, description, price_cents, duration_days
-_SEED_VIP_PLAN = (
-    "VIP Mensuel",
-    "Accès à une catégorie de contenu exclusif et un tour de roue bonus chaque jour.",
-    2990,
-    30,
-)
 
 # slug, name, price_cents
 _SEED_WHEELS = [
@@ -154,64 +146,85 @@ async def _apply_schema(pool: asyncpg.Pool) -> None:
 
 
 async def _seed_catalog(pool: asyncpg.Pool) -> None:
-    """Désactive les anciens produits de démonstration et amorce le vrai catalogue.
-
-    Idempotent : chaque catégorie n'est (ré)amorcée que si elle ne contient
-    encore aucun produit actif, de sorte que les commandes/paniers existants
-    (référençant les anciens produits par ID) restent valides — on désactive
-    au lieu de supprimer.
-    """
+    """Désactive les anciens produits et amorce le catalogue photo / vidéo / appel."""
     async with pool.acquire() as connection:
         async with connection.transaction():
             await _retire_legacy_products(connection)
-            await _seed_photo_category(connection)
+            await _retire_vip_products(connection)
+            await _seed_media_category(connection)
             await _seed_call_category(connection)
-            await _seed_vip_category(connection)
 
 
 async def _retire_legacy_products(connection: asyncpg.Connection) -> None:
+    legacy = list(_LEGACY_PRODUCT_NAMES) + [
+        "Pack Découverte",
+        "Pack Complet",
+        "Pack Exclusif",
+        "VIP Mensuel",
+    ]
     result = await connection.execute(
         "UPDATE products SET is_active = FALSE WHERE name = ANY($1::text[]) AND is_active = TRUE",
-        list(_LEGACY_PRODUCT_NAMES),
+        legacy,
     )
     if result != "UPDATE 0":
-        logger.info("Anciens produits de démonstration désactivés (%s)", result)
+        logger.info("Anciens produits désactivés (%s)", result)
 
 
-async def _seed_photo_category(connection: asyncpg.Connection) -> None:
-    count = await connection.fetchval(
-        "SELECT COUNT(*) FROM products WHERE category = 'photo' AND is_active = TRUE"
+async def _retire_vip_products(connection: asyncpg.Connection) -> None:
+    result = await connection.execute(
+        "UPDATE products SET is_active = FALSE WHERE category = 'vip' AND is_active = TRUE"
     )
-    if count:
-        await _sync_photo_reward_counts(connection)
-        return
-    for name, description, price_cents, currency, reward_count in _SEED_PHOTOS:
-        await connection.execute(
-            """
-            INSERT INTO products (name, description, price_cents, currency, category, reward_count)
-            VALUES ($1, $2, $3, $4, 'photo', $5)
-            """,
-            name,
-            description,
-            price_cents,
-            currency,
-            reward_count,
-        )
-    logger.info("Catalogue 'photo' initialisé avec %d article(s)", len(_SEED_PHOTOS))
+    if result != "UPDATE 0":
+        logger.info("Produits VIP désactivés (%s)", result)
 
 
-async def _sync_photo_reward_counts(connection: asyncpg.Connection) -> None:
-    for name, _description, _price, _currency, reward_count in _SEED_PHOTOS:
-        await connection.execute(
+async def _seed_media_category(connection: asyncpg.Connection) -> None:
+    """Un pack = une photo ou une vidéo (reward_count = 1)."""
+    for name, description, price_cents, currency, category in _SEED_MEDIA:
+        existing = await connection.fetchval(
             """
-            UPDATE products
-            SET reward_count = $2
-            WHERE category = 'photo' AND name = $1 AND is_active = TRUE
-              AND (reward_count IS NULL OR reward_count <> $2)
+            SELECT id FROM products
+            WHERE category = $1 AND name = $2
+            ORDER BY id LIMIT 1
             """,
+            category,
             name,
-            reward_count,
         )
+        if existing:
+            await connection.execute(
+                """
+                UPDATE products
+                SET description = $2, price_cents = $3, currency = $4,
+                    reward_count = 1, is_active = TRUE
+                WHERE id = $1
+                """,
+                existing,
+                description,
+                price_cents,
+                currency,
+            )
+        else:
+            await connection.execute(
+                """
+                INSERT INTO products
+                    (name, description, price_cents, currency, category, reward_count)
+                VALUES ($1, $2, $3, $4, $5, 1)
+                """,
+                name,
+                description,
+                price_cents,
+                currency,
+                category,
+            )
+    await connection.execute(
+        """
+        UPDATE products
+        SET reward_count = 1
+        WHERE category IN ('photo', 'video') AND is_active = TRUE
+          AND (reward_count IS NULL OR reward_count <> 1)
+        """
+    )
+    logger.info("Catalogue photo/vidéo synchronisé (%d article(s))", len(_SEED_MEDIA))
 
 
 async def _seed_call_category(connection: asyncpg.Connection) -> None:
@@ -233,37 +246,6 @@ async def _seed_call_category(connection: asyncpg.Connection) -> None:
             duration_minutes,
         )
     logger.info("Catalogue 'call' initialisé avec %d article(s)", len(_SEED_CALLS))
-
-
-async def _seed_vip_category(connection: asyncpg.Connection) -> None:
-    count = await connection.fetchval(
-        "SELECT COUNT(*) FROM products WHERE category = 'vip' AND is_active = TRUE"
-    )
-    if count:
-        return
-    name, description, price_cents, duration_days = _SEED_VIP_PLAN
-    plan_id = await connection.fetchval(
-        """
-        INSERT INTO vip_plans (name, price_cents, duration_days, description)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id
-        """,
-        name,
-        price_cents,
-        duration_days,
-        description,
-    )
-    await connection.execute(
-        """
-        INSERT INTO products (name, description, price_cents, currency, category, vip_plan_id)
-        VALUES ($1, $2, $3, 'EUR', 'vip', $4)
-        """,
-        name,
-        description,
-        price_cents,
-        plan_id,
-    )
-    logger.info("Formule VIP initialisée : %s (%s cents / %s jours)", name, price_cents, duration_days)
 
 
 async def _seed_wheels(pool: asyncpg.Pool) -> None:

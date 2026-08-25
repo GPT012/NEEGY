@@ -1,6 +1,6 @@
-"""Routes HTTP de la Mini App : catalogue, panier, checkout, roue, VIP.
+"""Routes HTTP de la Mini App : catalogue, panier, checkout, roue.
 
-Toutes les routes qui touchent au panier/à la roue/au VIP exigent un
+Toutes les routes qui touchent au panier/à la roue exigent un
 `initData` Telegram valide (header `X-Telegram-Init-Data`), revalidé à chaque
 requête - voir api/telegram_auth.py. Aucune confiance n'est faite à un
 user_id envoyé tel quel par le client.
@@ -17,11 +17,9 @@ import asyncpg
 
 from api.telegram_auth import InvalidInitData, validate_init_data
 from db.repository import (
-    activate_vip_for_order,
     CartError,
     CartItem,
     Product,
-    VipStatus,
     WheelPrize,
     create_order_from_cart,
     customer_note_lines,
@@ -31,10 +29,8 @@ from db.repository import (
     get_pending_order,
     get_photo_items_label,
     get_today_spin,
-    get_vip_status,
     get_call_slot_for_order,
     get_points_balance,
-    list_active_vip_plans,
     list_available_call_slots,
     list_products,
     list_wheels,
@@ -55,7 +51,7 @@ routes = web.RouteTableDef()
 INIT_DATA_HEADER = "X-Telegram-Init-Data"
 GENERIC_ERROR_BODY = {"error": "Une erreur est survenue. Merci de réessayer plus tard."}
 UNAVAILABLE_BODY = {"error": "La boutique est momentanément indisponible. Réessaie dans quelques minutes."}
-VALID_CATEGORIES = {"photo", "call", "vip", "wheel"}
+VALID_CATEGORIES = {"photo", "video", "call", "wheel"}
 
 
 def _get_pool(request: web.Request) -> asyncpg.Pool:
@@ -156,14 +152,6 @@ def _serialize_wheel_prize(prize: WheelPrize) -> dict:
         "points_amount": prize.points_amount,
         "content_pool": prize.content_pool,
         "weight": prize.weight,
-    }
-
-
-def _serialize_vip_status(status: VipStatus) -> dict:
-    return {
-        "active": status.active,
-        "plan_name": status.plan_name,
-        "expires_at": status.expires_at.isoformat() if status.expires_at else None,
     }
 
 
@@ -341,33 +329,6 @@ async def post_wheel_spin(request: web.Request) -> web.Response:
     return web.json_response({**_serialize_wheel_prize(prize), "points_balance": balance})
 
 
-@routes.get("/api/vip/status")
-async def get_vip_status_route(request: web.Request) -> web.Response:
-    user_id = _authenticate(request)
-    pool = _get_pool(request)
-    try:
-        status = await get_vip_status(pool, user_id)
-        plans = await list_active_vip_plans(pool)
-        return web.json_response(
-            {
-                **_serialize_vip_status(status),
-                "plans": [
-                    {
-                        "id": p.id,
-                        "name": p.name,
-                        "price_cents": p.price_cents,
-                        "duration_days": p.duration_days,
-                        "description": p.description,
-                    }
-                    for p in plans
-                ],
-            }
-        )
-    except Exception:
-        logger.exception("Erreur lors de la récupération du statut VIP pour user_id=%s", user_id)
-        return web.json_response(GENERIC_ERROR_BODY, status=500)
-
-
 def _clip(value: object, max_len: int) -> str | None:
     if not isinstance(value, str):
         return None
@@ -538,13 +499,6 @@ async def pay_with_points(request: web.Request) -> web.Response:
 
     order = await get_order(pool, order_id)
     try:
-        vip_status = await activate_vip_for_order(pool, order_id)
-        if vip_status is not None:
-            await bot.send_message(
-                user_id,
-                f"🎉 Ton abonnement VIP « {vip_status.plan_name} » est activé jusqu'au "
-                f"{vip_status.expires_at:%d/%m/%Y} !",
-            )
         await deliver_fulfillment(bot, user_id, fulfillment)
         call_slot = await get_call_slot_for_order(pool, order_id)
         if call_slot is not None and fulfillment.call_slot is None:
@@ -553,7 +507,7 @@ async def pay_with_points(request: web.Request) -> web.Response:
                 f"📞 Ton appel du {call_slot.start_at:%d/%m/%Y à %H:%M} UTC est confirmé !",
             )
         delivered = bool(fulfillment.assets or fulfillment.points_amount or fulfillment.call_slot)
-        if vip_status is None and call_slot is None and not delivered:
+        if call_slot is None and not delivered:
             await bot.send_message(
                 user_id,
                 f"✅ Commande #{order_id} payée avec {points_spent} points. Merci !",

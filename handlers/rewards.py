@@ -110,7 +110,7 @@ def admin_fulfillment_lines(fulfillment: FulfillmentResult) -> list[str]:
     elif fulfillment.prize_kind in ("photo", "video"):
         lines.append("→ Aucun fichier envoyé (file vide). Remplis le stock puis /fulfill.")
     if fulfillment.shipped_complete:
-        lines.append("→ Pack photo livré automatiquement.")
+        lines.append("→ Média livré automatiquement.")
     for warning in fulfillment.warnings:
         lines.append(f"⚠ {warning}")
     return lines

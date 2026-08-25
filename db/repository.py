@@ -144,8 +144,11 @@ REWARD_POOL_LABELS = {
 POOL_PHOTOS = "photos"
 POOL_VIDEOS = "videos"
 
-# Tous les packs photo prennent N fichiers dans la même file.
-_BOOSTER_POOL_BY_COUNT = {3: POOL_PHOTOS, 8: POOL_PHOTOS, 12: POOL_PHOTOS}
+# Un pack = 1 fichier dans la file correspondante.
+_MEDIA_POOL_BY_CATEGORY = {
+    "photo": POOL_PHOTOS,
+    "video": POOL_VIDEOS,
+}
 
 
 @dataclass(frozen=True)
@@ -1255,13 +1258,13 @@ async def fulfill_paid_order(connection: asyncpg.Connection, order_id: int) -> F
             await _fulfill_paid_wheel(
                 connection, user_id, order_id, int(item["wheel_id"]), result
             )
-        elif item["category"] == "photo":
-            count = int(item["reward_count"] or 0)
-            pool_name = _BOOSTER_POOL_BY_COUNT.get(count)
-            if not pool_name or count <= 0:
+        elif item["category"] in ("photo", "video"):
+            pool_name = _MEDIA_POOL_BY_CATEGORY.get(item["category"])
+            count = max(1, int(item["reward_count"] or 1))
+            if not pool_name:
                 result.needs_manual_ship = True
                 result.warnings.append(
-                    f"Pack photo sans stock automatisé (commande #{order_id})."
+                    f"Pack média sans stock automatisé (commande #{order_id})."
                 )
                 continue
             already = await connection.fetchval(
@@ -1558,7 +1561,7 @@ async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
         JOIN products p ON p.id = oi.product_id
         WHERE o.status = 'paid'
           AND o.shipped_at IS NULL
-          AND p.category = 'photo'
+          AND p.category IN ('photo', 'video')
         GROUP BY o.id, o.user_id, o.customer_name, o.telegram_username
         ORDER BY o.id
         """
@@ -1576,7 +1579,7 @@ async def get_photo_items_label(pool: asyncpg.Pool, order_id: int) -> str | None
         )
         FROM order_items oi
         JOIN products p ON p.id = oi.product_id
-        WHERE oi.order_id = $1 AND p.category = 'photo'
+        WHERE oi.order_id = $1 AND p.category IN ('photo', 'video')
         """,
         order_id,
     )
@@ -1706,8 +1709,6 @@ def customer_note_lines(snapshot: CustomerSnapshot) -> list[str]:
             lines.append("Déjà : " + ", ".join(snapshot.previous_products[:6]))
     if snapshot.folders:
         lines.append("Dossiers : " + ", ".join(snapshot.folders))
-    if snapshot.vip_plan:
-        lines.append(f"VIP : {snapshot.vip_plan}")
     return lines
 
 
@@ -1716,8 +1717,6 @@ def customer_hint_suffix(task: ShipTask) -> str:
     if task.is_first_order:
         bits.append("1re")
     bits.extend(task.folders)
-    if task.is_vip:
-        bits.append("VIP")
     if not bits:
         return ""
     return " · " + ", ".join(bits)

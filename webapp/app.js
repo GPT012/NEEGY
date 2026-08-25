@@ -30,24 +30,16 @@
   const wheelStatusEl = document.getElementById("wheel-status-text");
   const wheelSpinBtn = document.getElementById("wheel-spin-btn");
   const wheelGraphicEl = document.getElementById("wheel-graphic");
-  const vipContentEl = document.getElementById("vip-content");
   const tabButtons = document.querySelectorAll(".tab-btn");
 
   const views = {
     shop: document.getElementById("view-shop"),
     wheel: document.getElementById("view-wheel"),
-    vip: document.getElementById("view-vip"),
   };
   const pageMeta = {
-    shop: { title: "Le deck", subtitle: "Choisis ton booster. Chaque pack a sa rareté." },
+    shop: { title: "Boutique", subtitle: "Choisis une photo ou une vidéo." },
     wheel: { title: "Les roues", subtitle: "Une quotidienne. Deux payantes." },
-    vip: { title: "Le cercle", subtitle: "L'accès discret, sans ostentation." },
   };
-  const BOOSTER_TIERS = [
-    { rarity: "COMMON", energy: "feuille", cards: "3 cartes" },
-    { rarity: "UNCOMMON", energy: "vague", cards: "8 cartes" },
-    { rarity: "RARE", energy: "éclair", cards: "12 cartes" },
-  ];
   const CALL_TIERS = {
     15: { rarity: "FIRE", energy: "feu" },
     30: { rarity: "PSY", energy: "esprit" },
@@ -294,7 +286,6 @@
     window.scrollTo({ top: 0, behavior: "smooth" });
 
     if (tab === "wheel") refreshWheelStatus();
-    if (tab === "vip") refreshVipStatus();
     updateCartChrome();
     updateMainButton();
   }
@@ -311,12 +302,13 @@
   // ------------------------------------------------------------------
 
   async function fetchCatalog() {
-    const [photoResult, callResult, cart] = await Promise.all([
+    const [photoResult, videoResult, callResult, cart] = await Promise.all([
       apiFetch("/api/products?category=photo"),
+      apiFetch("/api/products?category=video"),
       apiFetch("/api/products?category=call"),
       apiFetch("/api/cart"),
     ]);
-    photos = photoResult;
+    photos = [...photoResult, ...videoResult];
     calls = callResult;
     applyCart(cart);
   }
@@ -353,11 +345,11 @@
 
   function renderPhotoList() {
     if (!photos.length) {
-      renderEmpty(photoListEl, "★", "Aucun booster en stock pour le moment.");
+      renderEmpty(photoListEl, "★", "Aucune photo ni vidéo disponible pour le moment.");
       photoNoteEl.textContent = "";
       return;
     }
-    photoNoteEl.textContent = `${photos.length} boosters`;
+    photoNoteEl.textContent = `${photos.length} offre${photos.length > 1 ? "s" : ""}`;
     photoListEl.innerHTML = "";
     const featuredId = photos.reduce(
       (best, product) => (product.price_cents > best.price_cents ? product : best),
@@ -372,8 +364,10 @@
   function renderPhotoCard(product, index, featured) {
     const entry = cartByProduct.get(product.id);
     const quantity = entry?.quantity || 0;
-    const tier = BOOSTER_TIERS[Math.min(index, BOOSTER_TIERS.length - 1)];
-    const rarityClass = `booster-${tier.rarity.toLowerCase()}`;
+    const isVideo = product.category === "video";
+    const rarityClass = isVideo ? "booster-rare" : "booster-common";
+    const kindLabel = isVideo ? "1 vidéo" : "1 photo";
+    const banner = isVideo ? "VIDÉO" : "PHOTO";
 
     const pack = document.createElement("article");
     pack.className = `booster ${rarityClass}${featured ? " booster-featured" : ""}${quantity ? " in-cart" : ""}`;
@@ -381,15 +375,15 @@
       <div class="booster-shine" aria-hidden="true"></div>
       <div class="booster-stars" aria-hidden="true"></div>
       <header class="booster-header">
-        <span class="booster-set">NEEGY · SET 01</span>
-        <span class="booster-rarity">${tier.rarity}</span>
+        <span class="booster-set">NEEGY</span>
+        <span class="booster-rarity">${isVideo ? "VIDEO" : "PHOTO"}</span>
       </header>
       <div class="booster-window">
         <span class="booster-energy" aria-hidden="true"></span>
         <p class="booster-title">${escapeHtml(product.name)}</p>
-        <p class="booster-cards">${escapeHtml(tier.cards)}</p>
+        <p class="booster-cards">${escapeHtml(kindLabel)}</p>
       </div>
-      <p class="booster-banner">BOOSTER PACK</p>
+      <p class="booster-banner">${banner}</p>
       <p class="booster-desc">${escapeHtml(product.description)}</p>
       <footer class="booster-foot"></footer>
     `;
@@ -409,7 +403,7 @@
       });
     } else {
       actionBtn.className = "btn btn-gold booster-add";
-      actionBtn.textContent = "Ouvrir";
+      actionBtn.textContent = "Ajouter";
       actionBtn.addEventListener("click", (event) => {
         event.stopPropagation();
         if (shopIsLocked()) return;
@@ -448,7 +442,7 @@
       <div class="booster-shine" aria-hidden="true"></div>
       <div class="booster-stars" aria-hidden="true"></div>
       <header class="booster-header">
-        <span class="booster-set">NEEGY · LIVE</span>
+        <span class="booster-set">NEEGY · APPEL</span>
         <span class="booster-rarity">${tier.rarity}</span>
       </header>
       <div class="booster-window">
@@ -456,7 +450,7 @@
         <p class="booster-title">${escapeHtml(product.name)}</p>
         <p class="booster-cards">${duration} min</p>
       </div>
-      <p class="booster-banner">ENERGY PACK</p>
+      <p class="booster-banner">APPEL</p>
       <p class="booster-desc">${escapeHtml(product.description)}</p>
       <footer class="booster-foot">
         <span class="booster-price">${formatPrice(product.price_cents, product.currency)}</span>
@@ -842,95 +836,6 @@
     }
     await refreshWheelStatus();
   });
-
-  // ------------------------------------------------------------------
-  // VIP
-  // ------------------------------------------------------------------
-
-  async function refreshVipStatus() {
-    try {
-      const [status, vipProducts] = await Promise.all([
-        apiFetch("/api/vip/status"),
-        apiFetch("/api/products?category=vip"),
-      ]);
-      renderVip(status, vipProducts);
-    } catch (err) {
-      renderEmpty(vipContentEl, "♔", "Le cercle est inaccessible pour le moment.");
-      showToast(err.message);
-    }
-  }
-
-  function renderVip(status, vipProducts) {
-    vipContentEl.innerHTML = "";
-
-    if (status.active) {
-      const hero = document.createElement("div");
-      hero.className = "vip-hero";
-      hero.innerHTML = `
-        <p class="vip-crown">♔</p>
-        <p class="badge">Membre du cercle</p>
-        <p class="vip-plan-name">${escapeHtml(status.plan_name || "VIP")}</p>
-        <p class="vip-expiry">Ton accès court jusqu'au ${escapeHtml(formatDate(status.expires_at))}</p>
-      `;
-      vipContentEl.appendChild(hero);
-      return;
-    }
-
-    if (!vipProducts.length) {
-      renderEmpty(vipContentEl, "♔", "Aucune formule n'est ouverte pour le moment.");
-      return;
-    }
-
-    for (const product of vipProducts) {
-      const entry = cartByProduct.get(product.id);
-      const card = document.createElement("div");
-      card.className = "vip-hero";
-
-      // La description en base fait foi : si elle contient des puces (retours
-      // à la ligne, · ou •), on l'affiche en liste d'avantages.
-      const parts = String(product.description)
-        .split(/\r?\n|·|•/)
-        .map((part) => part.trim())
-        .filter(Boolean);
-      const details =
-        parts.length > 1
-          ? `<ul class="perks">${parts.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ul>`
-          : `<p class="vip-expiry">${escapeHtml(product.description)}</p>`;
-
-      card.innerHTML = `
-        <p class="vip-crown">♔</p>
-        <p class="vip-plan-name">${escapeHtml(product.name)}</p>
-        <p class="vip-price">${formatPrice(product.price_cents, product.currency)}<small> / mois</small></p>
-        ${details}
-      `;
-
-      const button = document.createElement("button");
-      if (entry?.quantity) {
-        button.className = "btn btn-ghost btn-block";
-        button.textContent = "Retirer du panier";
-        button.addEventListener("click", async () => {
-          await removeCartItem(product.id);
-          await refreshVipStatus();
-        });
-      } else {
-        button.className = "btn btn-gold btn-block";
-        button.textContent = "Demander l'accès";
-        button.addEventListener("click", async () => {
-          if (shopIsLocked()) return;
-          await changeQuantity(product.id, 1);
-          await refreshVipStatus();
-          showToast("Ajouté au panier — valide depuis l'onglet Boutique.", "success");
-        });
-      }
-      card.appendChild(button);
-      vipContentEl.appendChild(card);
-    }
-
-    const hint = document.createElement("p");
-    hint.className = "vip-hint";
-    hint.textContent = "La commande se conclut depuis l'onglet Boutique.";
-    vipContentEl.appendChild(hint);
-  }
 
   // ------------------------------------------------------------------
   // Démarrage

@@ -25,7 +25,6 @@ from db.repository import (
     CartError,
     REWARD_POOL_LABELS,
     VALID_REWARD_POOLS,
-    activate_vip_for_order,
     add_reward_asset,
     cancel_pending_order,
     create_call_slot,
@@ -169,18 +168,6 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
     summary_lines = [f"✅ Commande #{order_id} confirmée."]
     summary_lines.extend(admin_fulfillment_lines(fulfillment))
 
-    vip_status = await activate_vip_for_order(db_pool, order_id)
-    if vip_status is not None:
-        summary_lines.append(f"→ VIP « {vip_status.plan_name} » activé jusqu'au {vip_status.expires_at:%d/%m/%Y}.")
-        try:
-            await bot.send_message(
-                order.user_id,
-                f"🎉 Ton abonnement VIP « {vip_status.plan_name} » est activé jusqu'au "
-                f"{vip_status.expires_at:%d/%m/%Y} !",
-            )
-        except Exception:
-            logger.exception("Impossible de notifier le client user_id=%s (VIP activé)", order.user_id)
-
     send_errors = await deliver_fulfillment(bot, order.user_id, fulfillment)
     summary_lines.extend(f"⚠ {err}" for err in send_errors)
 
@@ -205,7 +192,7 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
             )
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (créneau pris)", order.user_id)
-    elif vip_status is None and call_slot is None and not delivered:
+    elif call_slot is None and not delivered:
         try:
             await bot.send_message(order.user_id, f"✅ Ta commande #{order_id} est confirmée, merci !")
         except Exception:
@@ -506,8 +493,8 @@ async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
     lines = [
         "⚙️ Paramètres — stock\n",
         "Deux files seulement :\n"
-        "• File photos → packs + lot photo de la roue Rose\n"
-        "• File vidéos → lots vidéo Rose / Nuit\n"
+        "• File photos → produit Photo + lot photo de la roue Rose\n"
+        "• File vidéos → produit Vidéo + lots vidéo Rose / Nuit\n"
         "Chaque fichier n'est donné qu'à une seule cliente.\n"
         "Ajoute des fichiers, puis valide l'aperçu.\n",
     ]
