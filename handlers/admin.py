@@ -85,7 +85,7 @@ STOCK_USAGE = (
     "Envoie une photo ou une vidéo avec la légende /stock POOL\n"
     "ou ouvre le menu : /stock"
 )
-GRANTS_USAGE = "Usage : /grants ID_COMMANDE ou /grants @username"
+GRANTS_USAGE = "Usage : /grants ID_COMMANDE ou /grants @username (alias : /rewards)"
 FULFILL_USAGE = "Usage : /fulfill ID_COMMANDE\nEx: /fulfill 12"
 CANCEL_USAGE = "Usage : /cancel ID_COMMANDE\nEx: /cancel 42"
 SHIP_USAGE = "Usage : /ship ID_COMMANDE\nEx: /ship 42"
@@ -702,7 +702,7 @@ async def handle_stock_cancel_preview(callback: CallbackQuery, state: FSMContext
         await state.clear()
 
 
-@router.message(Command("grants"))
+@router.message(Command("grants", "rewards"))
 async def handle_grants(message: Message, command: CommandObject, db_pool: asyncpg.Pool | None) -> None:
     if db_pool is None:
         await message.answer("Base de données indisponible pour le moment.")

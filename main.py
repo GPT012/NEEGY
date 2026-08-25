@@ -57,6 +57,7 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="addslot", description="Ajouter un créneau"),
     BotCommand(command="stock", description="Remplir photos et vidéos"),
     BotCommand(command="grants", description="Qui a reçu quel lot"),
+    BotCommand(command="rewards", description="Alias de /grants"),
     BotCommand(command="fulfill", description="Relancer l'envoi d'un lot"),
     *BOT_COMMANDS,
 ]
