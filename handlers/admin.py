@@ -466,14 +466,29 @@ async def handle_folders(message: Message, db_pool: asyncpg.Pool | None) -> None
 
 
 def _extract_stock_media(message: Message) -> tuple[str, str, str] | None:
+    """Accepte photo, vidéo, note vidéo, ou fichier vidéo envoyé comme document."""
     src = message
-    if not message.photo and not message.video and message.reply_to_message:
+    if (
+        not message.photo
+        and not message.video
+        and not message.video_note
+        and not message.document
+        and message.reply_to_message
+    ):
         src = message.reply_to_message
     if src.photo:
         shot = src.photo[-1]
         return "photo", shot.file_id, shot.file_unique_id
     if src.video:
         return "video", src.video.file_id, src.video.file_unique_id
+    if src.video_note:
+        return "video", src.video_note.file_id, src.video_note.file_unique_id
+    if src.document:
+        mime = (src.document.mime_type or "").lower()
+        if mime.startswith("video/"):
+            return "video", src.document.file_id, src.document.file_unique_id
+        if mime.startswith("image/"):
+            return "photo", src.document.file_id, src.document.file_unique_id
     return None
 
 
@@ -489,8 +504,11 @@ async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
     rows = await list_reward_stock(db_pool)
     counts = {name: total for name, total, _unused in rows}
     lines = [
-        "⚙️ Paramètres — stock photos et vidéos\n",
-        "Clique un slot, envoie le fichier, puis valide l'aperçu.\n",
+        "⚙️ Paramètres — stock\n",
+        "Deux files seulement :\n"
+        "• File photos → packs + lot photo de la roue Rose\n"
+        "• File vidéos → lots vidéo Rose / Nuit\n"
+        "Ajoute des fichiers, puis valide l'aperçu.\n",
     ]
     for name, total, unused in rows:
         lines.append(f"• {_pool_title(name)} — {total} fichier(s), {unused} jamais attribué(s)")
@@ -581,10 +599,13 @@ async def handle_stock(
 async def _send_stock_preview(message: Message, pool_name: str, kind: str, file_id: str) -> None:
     caption = f"Aperçu — {_pool_title(pool_name)}"
     markup = stock_preview_keyboard()
-    if kind == "video":
-        await message.answer_video(file_id, caption=caption, reply_markup=markup)
-    else:
-        await message.answer_photo(file_id, caption=caption, reply_markup=markup)
+    try:
+        if kind == "video":
+            await message.answer_video(file_id, caption=caption, reply_markup=markup)
+        else:
+            await message.answer_photo(file_id, caption=caption, reply_markup=markup)
+    except TelegramBadRequest:
+        await message.answer_document(file_id, caption=caption, reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith(CALLBACK_STOCK_POOL_PREFIX))
@@ -621,14 +642,14 @@ async def handle_stock_more(callback: CallbackQuery, state: FSMContext) -> None:
         await _ask_for_stock_file(callback.message, state, pool_name, edit=True)
 
 
-@router.message(StateFilter(StockFSM.waiting_media), F.photo | F.video)
+@router.message(StateFilter(StockFSM.waiting_media), F.photo | F.video | F.video_note | F.document)
 async def handle_stock_media(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     pool_name = data.get("pool")
     expected = data.get("kind")
     media = _extract_stock_media(message)
     if pool_name not in VALID_REWARD_POOLS or media is None:
-        await message.answer("Envoie une photo ou une vidéo.")
+        await message.answer("Envoie une photo ou une vidéo (fichier vidéo accepté aussi).")
         return
     kind, file_id, unique_id = media
     if kind != expected:

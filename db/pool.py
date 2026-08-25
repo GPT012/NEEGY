@@ -64,12 +64,12 @@ _SEED_WHEEL_PRIZES = [
     ("rose", "3", "C'est tombé.", "points", 3, 3, None, None),
     ("rose", "5", "Un peu plus loin.", "points", 1, 5, None, None),
     ("rose", "9", "Le rare.", "points", 1, 9, None, None),
-    ("rose", "photo", "Une image pour toi.", "photo", 4, None, "wheel5_photo", None),
-    ("rose", "vidéo", "Rien qu'à tes yeux.", "video", 1, None, "wheel5_video", None),
+    ("rose", "photo", "Une image pour toi.", "photo", 4, None, "photos", None),
+    ("rose", "vidéo", "Rien qu'à tes yeux.", "video", 1, None, "videos", None),
     ("nuit", "15", "C'est tombé.", "points", 3, 15, None, None),
     ("nuit", "20", "Un peu plus loin.", "points", 1, 20, None, None),
     ("nuit", "36", "Le rare.", "points", 1, 36, None, None),
-    ("nuit", "vidéo", "Rien qu'à tes yeux.", "video", 3, None, "wheel20_video", None),
+    ("nuit", "vidéo", "Rien qu'à tes yeux.", "video", 3, None, "videos", None),
     ("nuit", "cam", "Elle te réserve un appel.", "call", 2, None, None, 15),
 ]
 

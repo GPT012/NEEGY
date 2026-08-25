@@ -238,3 +238,13 @@ CREATE TABLE IF NOT EXISTS reward_grants (
 
 CREATE INDEX IF NOT EXISTS idx_reward_grants_order_id ON reward_grants (order_id);
 CREATE INDEX IF NOT EXISTS idx_reward_grants_user_id ON reward_grants (user_id);
+
+-- Simplification : une file photos + une file vidéos (au lieu de 6 slots).
+UPDATE reward_assets SET pool = 'photos'
+ WHERE pool IN ('wheel5_photo', 'booster_10', 'booster_20', 'booster_30');
+UPDATE reward_assets SET pool = 'videos'
+ WHERE pool IN ('wheel5_video', 'wheel20_video');
+UPDATE wheel_prizes SET content_pool = 'photos' WHERE content_pool = 'wheel5_photo';
+UPDATE wheel_prizes SET content_pool = 'videos'
+ WHERE content_pool IN ('wheel5_video', 'wheel20_video');
+

@@ -129,25 +129,23 @@ class RewardGrantRow:
     caption: str
 
 
+# Deux files globales : packs ET lots roue piochent dedans.
+# (Les anciens noms de slots sont migrés au démarrage, voir schema.sql.)
 VALID_REWARD_POOLS = {
-    "wheel5_photo": "photo",
-    "wheel5_video": "video",
-    "wheel20_video": "video",
-    "booster_10": "photo",
-    "booster_20": "photo",
-    "booster_30": "photo",
+    "photos": "photo",
+    "videos": "video",
 }
 
 REWARD_POOL_LABELS = {
-    "wheel5_photo": "Rose · photos",
-    "wheel5_video": "Rose · vidéos",
-    "wheel20_video": "Nuit · vidéos",
-    "booster_10": "Pack 10 €",
-    "booster_20": "Pack 20 €",
-    "booster_30": "Pack 30 €",
+    "photos": "File photos",
+    "videos": "File vidéos",
 }
 
-_BOOSTER_POOL_BY_COUNT = {3: "booster_10", 8: "booster_20", 12: "booster_30"}
+POOL_PHOTOS = "photos"
+POOL_VIDEOS = "videos"
+
+# Tous les packs photo prennent N fichiers dans la même file.
+_BOOSTER_POOL_BY_COUNT = {3: POOL_PHOTOS, 8: POOL_PHOTOS, 12: POOL_PHOTOS}
 
 
 @dataclass(frozen=True)
@@ -1193,6 +1191,17 @@ async def _fulfill_paid_wheel(
             order_id,
         )
         if int(already or 0) > 0:
+            granted_rows = await connection.fetch(
+                """
+                SELECT a.id, a.pool, a.kind, a.telegram_file_id, a.caption
+                FROM reward_grants g
+                JOIN reward_assets a ON a.id = g.asset_id
+                WHERE g.order_id = $1 AND g.source = 'wheel'
+                ORDER BY g.id
+                """,
+                order_id,
+            )
+            result.assets.extend(_row_to_asset(row) for row in granted_rows)
             return
         assets, warning = await _grant_assets(
             connection, user_id, order_id, content_pool, 1, "wheel"

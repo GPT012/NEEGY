@@ -5,10 +5,46 @@ from __future__ import annotations
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 
-from db.repository import FulfillmentResult
+from db.repository import FulfillmentResult, RewardAsset
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+async def _send_asset(bot: Bot, user_id: int, asset: RewardAsset) -> None:
+    caption = asset.caption or None
+    if asset.kind == "video":
+        try:
+            await bot.send_video(
+                user_id,
+                asset.telegram_file_id,
+                caption=caption,
+                protect_content=True,
+                supports_streaming=True,
+            )
+            return
+        except TelegramBadRequest:
+            await bot.send_document(
+                user_id,
+                asset.telegram_file_id,
+                caption=caption,
+                protect_content=True,
+            )
+            return
+    try:
+        await bot.send_photo(
+            user_id,
+            asset.telegram_file_id,
+            caption=caption,
+            protect_content=False,
+        )
+    except TelegramBadRequest:
+        await bot.send_document(
+            user_id,
+            asset.telegram_file_id,
+            caption=caption,
+            protect_content=False,
+        )
 
 
 async def deliver_fulfillment(bot: Bot, user_id: int, fulfillment: FulfillmentResult) -> list[str]:
@@ -34,23 +70,8 @@ async def deliver_fulfillment(bot: Bot, user_id: int, fulfillment: FulfillmentRe
             logger.exception("Impossible de prévenir user_id=%s (stock vide)", user_id)
 
     for asset in fulfillment.assets or []:
-        caption = asset.caption or None
         try:
-            if asset.kind == "video":
-                await bot.send_video(
-                    user_id,
-                    asset.telegram_file_id,
-                    caption=caption,
-                    protect_content=True,
-                    supports_streaming=True,
-                )
-            else:
-                await bot.send_photo(
-                    user_id,
-                    asset.telegram_file_id,
-                    caption=caption,
-                    protect_content=False,
-                )
+            await _send_asset(bot, user_id, asset)
         except TelegramBadRequest:
             logger.exception("Fichier Telegram refusé pour user_id=%s asset=%s", user_id, asset.id)
             send_errors.append(f"fichier #{asset.id} refusé")
@@ -75,9 +96,19 @@ def admin_fulfillment_lines(fulfillment: FulfillmentResult) -> list[str]:
     lines: list[str] = []
     if fulfillment.prize_label:
         extra = f" (+{fulfillment.points_amount} pts)" if fulfillment.points_amount else ""
-        lines.append(f"→ Lot : {fulfillment.prize_label}{extra}")
+        kind = f" [{fulfillment.prize_kind}]" if fulfillment.prize_kind else ""
+        lines.append(f"→ Lot : {fulfillment.prize_label}{kind}{extra}")
     if fulfillment.assets:
-        lines.append(f"→ {len(fulfillment.assets)} fichier(s) envoyé(s).")
+        photos = sum(1 for a in fulfillment.assets if a.kind == "photo")
+        videos = sum(1 for a in fulfillment.assets if a.kind == "video")
+        parts = []
+        if photos:
+            parts.append(f"{photos} photo(s)")
+        if videos:
+            parts.append(f"{videos} vidéo(s)")
+        lines.append(f"→ Envoyé : {', '.join(parts) or f'{len(fulfillment.assets)} fichier(s)'}.")
+    elif fulfillment.prize_kind in ("photo", "video"):
+        lines.append("→ Aucun fichier envoyé (file vide). Remplis le stock puis /fulfill.")
     if fulfillment.shipped_complete:
         lines.append("→ Pack photo livré automatiquement.")
     for warning in fulfillment.warnings:
