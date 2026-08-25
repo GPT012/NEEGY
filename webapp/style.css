@@ -184,7 +184,25 @@ html[data-theme="dark"] body {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  gap: 10px;
   margin: 0 0 14px;
+  flex-wrap: wrap;
+}
+
+.section-back {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0 8px 0 0;
+  font-family: var(--font-sans, inherit);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold-deep, #9a6b4f);
+  cursor: pointer;
+}
+
+.section-back[hidden] {
+  display: none;
 }
 
 .section-head h2 {
@@ -194,6 +212,7 @@ html[data-theme="dark"] body {
   font-weight: 600;
   letter-spacing: 0.01em;
   font-style: italic;
+  flex: 1;
 }
 
 .section-note {

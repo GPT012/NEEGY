@@ -135,7 +135,14 @@
   /** @type {Array<object>} */
   let photos = [];
   /** @type {Array<object>} */
+  let videos = [];
+  /** @type {Array<object>} */
   let calls = [];
+  /** @type {'root' | 'photo' | 'video'} */
+  let mediaBrowse = "root";
+  const mediaTitleEl = document.getElementById("media-title");
+  const mediaBackEl = document.getElementById("media-back");
+  const callSectionEl = document.getElementById("call-section");
   /** @type {Map<number, {quantity:number, call_slot_id:number|null, call_slot_start_at:string|null}>} */
   let cartByProduct = new Map();
   let cartTotalCents = 0;
@@ -317,7 +324,8 @@
       apiFetch("/api/products?category=call"),
       apiFetch("/api/cart"),
     ]);
-    photos = [...photoResult, ...videoResult];
+    photos = photoResult;
+    videos = videoResult;
     calls = callResult;
     applyCart(cart);
   }
@@ -346,40 +354,61 @@
   }
 
   function renderShop() {
-    renderPhotoList();
+    renderMediaBrowse();
     renderCallList();
     updateCartChrome();
     updateMainButton();
   }
 
-  function renderPhotoList() {
-    if (!photos.length) {
-      renderEmpty(photoListEl, "★", "Aucune photo ni vidéo disponible pour le moment.");
-      photoNoteEl.textContent = "";
+  function setMediaBrowse(level) {
+    mediaBrowse = level;
+    renderMediaBrowse();
+    if (callSectionEl) callSectionEl.hidden = level !== "root";
+  }
+
+  function renderMediaBrowse() {
+    if (!photoListEl) return;
+    photoListEl.innerHTML = "";
+
+    if (mediaBackEl) mediaBackEl.hidden = mediaBrowse === "root";
+    if (callSectionEl) callSectionEl.hidden = mediaBrowse !== "root";
+
+    if (mediaBrowse === "root") {
+      if (mediaTitleEl) mediaTitleEl.textContent = "Photos & vidéos";
+      photoNoteEl.textContent = "Choisis un type";
+      if (!photos.length && !videos.length) {
+        renderEmpty(photoListEl, "★", "Aucune photo ni vidéo disponible pour le moment.");
+        return;
+      }
+      if (photos.length) photoListEl.appendChild(renderCategoryCard("photo"));
+      if (videos.length) photoListEl.appendChild(renderCategoryCard("video"));
+      stagger([...photoListEl.children]);
       return;
     }
-    photoNoteEl.textContent = `${photos.length} offre${photos.length > 1 ? "s" : ""}`;
-    photoListEl.innerHTML = "";
-    const featuredId = photos.reduce(
-      (best, product) => (product.price_cents > best.price_cents ? product : best),
-      photos[0]
-    ).id;
-    photos.forEach((product, index) => {
-      photoListEl.appendChild(renderPhotoCard(product, index, product.id === featuredId));
+
+    const list = mediaBrowse === "photo" ? photos : videos;
+    const label = mediaBrowse === "photo" ? "Photos" : "Vidéos";
+    if (mediaTitleEl) mediaTitleEl.textContent = label;
+    photoNoteEl.textContent = `${list.length} tarif${list.length > 1 ? "s" : ""}`;
+
+    if (!list.length) {
+      renderEmpty(photoListEl, "★", `Aucun tarif ${label.toLowerCase()} pour le moment.`);
+      return;
+    }
+    list.forEach((product, index) => {
+      photoListEl.appendChild(renderPhotoCard(product, index, index === list.length - 1));
     });
     stagger([...photoListEl.children]);
   }
 
-  function renderPhotoCard(product, index, featured) {
-    const entry = cartByProduct.get(product.id);
-    const quantity = entry?.quantity || 0;
-    const isVideo = product.category === "video";
-    const rarityClass = isVideo ? "booster-rare" : "booster-common";
-    const kindLabel = isVideo ? "1 vidéo" : "1 photo";
-    const banner = isVideo ? "VIDÉO" : "PHOTO";
-
+  function renderCategoryCard(category) {
+    const isVideo = category === "video";
+    const list = isVideo ? videos : photos;
+    const prices = list
+      .map((p) => formatPrice(p.price_cents, p.currency))
+      .join(" · ");
     const pack = document.createElement("article");
-    pack.className = `booster ${rarityClass}${featured ? " booster-featured" : ""}${quantity ? " in-cart" : ""}`;
+    pack.className = `booster ${isVideo ? "booster-rare" : "booster-common"} booster-featured`;
     pack.innerHTML = `
       <div class="booster-shine" aria-hidden="true"></div>
       <div class="booster-stars" aria-hidden="true"></div>
@@ -389,8 +418,56 @@
       </header>
       <div class="booster-window">
         <span class="booster-energy" aria-hidden="true"></span>
+        <p class="booster-title">${isVideo ? "Vidéo" : "Photo"}</p>
+        <p class="booster-cards">1 fichier · ${list.length} tarifs</p>
+      </div>
+      <p class="booster-banner">${isVideo ? "VIDÉO" : "PHOTO"}</p>
+      <p class="booster-desc">${escapeHtml(prices)}</p>
+      <footer class="booster-foot"></footer>
+    `;
+    const foot = pack.querySelector(".booster-foot");
+    const btn = document.createElement("button");
+    btn.className = "btn btn-gold booster-add";
+    btn.textContent = "Choisir";
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      tg?.HapticFeedback?.selectionChanged?.();
+      setMediaBrowse(category);
+    });
+    foot.appendChild(btn);
+    pack.addEventListener("click", () => {
+      tg?.HapticFeedback?.selectionChanged?.();
+      setMediaBrowse(category);
+    });
+    return pack;
+  }
+
+  mediaBackEl?.addEventListener("click", () => {
+    tg?.HapticFeedback?.selectionChanged?.();
+    setMediaBrowse("root");
+  });
+
+  function renderPhotoCard(product, index, featured) {
+    const entry = cartByProduct.get(product.id);
+    const quantity = entry?.quantity || 0;
+    const isVideo = product.category === "video";
+    const rarityClass = isVideo ? "booster-rare" : "booster-common";
+    const kindLabel = formatPrice(product.price_cents, product.currency);
+    const banner = isVideo ? "VIDÉO" : "PHOTO";
+
+    const pack = document.createElement("article");
+    pack.className = `booster ${rarityClass}${featured ? " booster-featured" : ""}${quantity ? " in-cart" : ""}`;
+    pack.innerHTML = `
+      <div class="booster-shine" aria-hidden="true"></div>
+      <div class="booster-stars" aria-hidden="true"></div>
+      <header class="booster-header">
+        <span class="booster-set">NEEGY</span>
+        <span class="booster-rarity">${kindLabel}</span>
+      </header>
+      <div class="booster-window">
+        <span class="booster-energy" aria-hidden="true"></span>
         <p class="booster-title">${escapeHtml(product.name)}</p>
-        <p class="booster-cards">${escapeHtml(kindLabel)}</p>
+        <p class="booster-cards">1 ${isVideo ? "vidéo" : "photo"}</p>
       </div>
       <p class="booster-banner">${banner}</p>
       <p class="booster-desc">${escapeHtml(product.description)}</p>
