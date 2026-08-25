@@ -30,7 +30,16 @@
   const wheelStatusEl = document.getElementById("wheel-status-text");
   const wheelSpinBtn = document.getElementById("wheel-spin-btn");
   const wheelGraphicEl = document.getElementById("wheel-graphic");
+  const previewSheetEl = document.getElementById("preview-sheet");
+  const previewMediaEl = document.getElementById("preview-media");
+  const previewTitleEl = document.getElementById("preview-title");
+  const previewDescEl = document.getElementById("preview-desc");
+  const previewPriceEl = document.getElementById("preview-price");
+  const previewAddEl = document.getElementById("preview-add");
+  const previewCloseEl = document.getElementById("preview-close");
   const tabButtons = document.querySelectorAll(".tab-btn");
+  /** @type {object | null} */
+  let previewProduct = null;
 
   const views = {
     shop: document.getElementById("view-shop"),
@@ -388,6 +397,8 @@
       <footer class="booster-foot"></footer>
     `;
 
+    pack.addEventListener("click", () => openPreviewSheet(product));
+
     const foot = pack.querySelector(".booster-foot");
     const price = document.createElement("span");
     price.className = "booster-price";
@@ -403,17 +414,70 @@
       });
     } else {
       actionBtn.className = "btn btn-gold booster-add";
-      actionBtn.textContent = "Ajouter";
+      actionBtn.textContent = "Voir";
       actionBtn.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (shopIsLocked()) return;
-        changeQuantity(product.id, 1);
+        openPreviewSheet(product);
       });
     }
     foot.append(price, actionBtn);
 
     return pack;
   }
+
+  function closePreviewSheet() {
+    if (!previewSheetEl) return;
+    previewSheetEl.hidden = true;
+    previewProduct = null;
+    if (previewMediaEl) previewMediaEl.innerHTML = "";
+  }
+
+  function openPreviewSheet(product) {
+    if (!previewSheetEl) return;
+    previewProduct = product;
+    previewTitleEl.textContent = product.name;
+    previewDescEl.textContent = product.description || "";
+    previewPriceEl.textContent = formatPrice(product.price_cents, product.currency);
+    previewMediaEl.innerHTML = "";
+    if (product.has_preview) {
+      const isVideo = product.preview_kind === "video" || product.category === "video";
+      const url = `/api/products/${product.id}/preview`;
+      if (isVideo) {
+        const video = document.createElement("video");
+        video.src = url;
+        video.controls = true;
+        video.playsInline = true;
+        video.setAttribute("playsinline", "");
+        previewMediaEl.appendChild(video);
+      } else {
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = product.name;
+        previewMediaEl.appendChild(img);
+      }
+    } else {
+      const empty = document.createElement("p");
+      empty.className = "preview-empty";
+      empty.textContent = "Aperçu bientôt disponible.";
+      previewMediaEl.appendChild(empty);
+    }
+    const inCart = cartByProduct.has(product.id);
+    previewAddEl.hidden = inCart;
+    previewAddEl.textContent = "Ajouter au panier";
+    previewSheetEl.hidden = false;
+  }
+
+  previewCloseEl?.addEventListener("click", closePreviewSheet);
+  previewSheetEl?.addEventListener("click", (event) => {
+    if (event.target === previewSheetEl) closePreviewSheet();
+  });
+  previewAddEl?.addEventListener("click", async () => {
+    if (!previewProduct) return;
+    if (shopIsLocked()) return;
+    const productId = previewProduct.id;
+    closePreviewSheet();
+    await changeQuantity(productId, 1);
+  });
 
   function renderCallList() {
     if (!calls.length) {

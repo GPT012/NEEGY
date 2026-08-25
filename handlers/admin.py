@@ -27,6 +27,7 @@ from db.repository import (
     VALID_REWARD_POOLS,
     add_reward_asset,
     cancel_pending_order,
+    clear_product_preview,
     create_call_slot,
     customer_hint_suffix,
     find_user_id_by_username,
@@ -38,18 +39,24 @@ from db.repository import (
     list_grants_for_order,
     list_grants_for_user,
     list_assets_granted_for_order,
+    list_media_products,
     list_orders_to_ship,
     list_pending_orders,
     list_reward_stock,
     list_upcoming_call_slots,
     mark_order_paid,
     mark_order_shipped,
+    set_product_preview,
     tag_user,
     untag_user,
 )
 from handlers.rewards import admin_fulfillment_lines, deliver_fulfillment
 from keyboards.admin import (
     CALLBACK_PAY_PREFIX,
+    CALLBACK_PREVIEW_CLEAR_PREFIX,
+    CALLBACK_PREVIEW_NO,
+    CALLBACK_PREVIEW_OK,
+    CALLBACK_PREVIEW_PREFIX,
     CALLBACK_SHIP_PREFIX,
     CALLBACK_STOCK_MENU,
     CALLBACK_STOCK_MORE,
@@ -57,9 +64,11 @@ from keyboards.admin import (
     CALLBACK_STOCK_OK,
     CALLBACK_STOCK_POOL_PREFIX,
     orders_inbox_keyboard,
+    product_preview_confirm_keyboard,
+    product_preview_waiting_keyboard,
+    settings_keyboard,
     shipped_keyboard,
     stock_after_add_keyboard,
-    stock_pools_keyboard,
     stock_preview_keyboard,
     stock_waiting_keyboard,
 )
@@ -76,6 +85,8 @@ router.callback_query.filter(F.from_user.id == config.admin_user_id)
 class StockFSM(StatesGroup):
     waiting_media = State()
     preview = State()
+    waiting_product_preview = State()
+    confirm_product_preview = State()
 
 GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Merci de réessayer plus tard."
 
@@ -490,17 +501,22 @@ def _expected_kind_label(kind: str) -> str:
 async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
     rows = await list_reward_stock(db_pool)
     counts = {name: total for name, total, _unused in rows}
+    media = await list_media_products(db_pool)
     lines = [
-        "⚙️ Paramètres — stock\n",
-        "Deux files seulement :\n"
-        "• File photos → produit Photo + lot photo de la roue Rose\n"
-        "• File vidéos → produit Vidéo + lots vidéo Rose / Nuit\n"
-        "Chaque fichier n'est donné qu'à une seule cliente.\n"
-        "Ajoute des fichiers, puis valide l'aperçu.\n",
+        "⚙️ Paramètres\n",
+        "Stock (files partagées) :\n"
+        "• File photos → packs Photo + lot photo Rose\n"
+        "• File vidéos → packs Vidéo + lots vidéo Rose / Nuit\n"
+        "Chaque fichier n'est donné qu'à une seule cliente.\n",
+        "Previews boutique : 1 média par tarif, visible au clic.\n",
     ]
     for name, total, unused in rows:
-        lines.append(f"• {_pool_title(name)} — {total} fichier(s), {unused} jamais attribué(s)")
-    return "\n".join(lines), stock_pools_keyboard(counts)
+        lines.append(f"• {_pool_title(name)} — {total} fichier(s), {unused} libre(s)")
+    for product in media:
+        mark = "définie" if product.has_preview else "absente"
+        lines.append(f"• Preview {product.name} — {mark}")
+    return "\n".join(lines), settings_keyboard(counts, media)
+
 
 
 async def _send_stock_menu(message: Message, db_pool: asyncpg.Pool) -> None:
@@ -521,12 +537,31 @@ async def _ask_for_stock_file(
 ) -> None:
     kind = VALID_REWARD_POOLS[pool_name]
     await state.set_state(StockFSM.waiting_media)
-    await state.update_data(pool=pool_name, kind=kind)
+    await state.update_data(mode="stock", pool=pool_name, kind=kind, product_id=None)
     text = (
         f"Envoie {_expected_kind_label(kind)} pour « {_pool_title(pool_name)} ».\n"
         "Tu verras un aperçu avant de l'ajouter."
     )
     markup = stock_waiting_keyboard()
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=markup)
+            return
+        except TelegramBadRequest:
+            pass
+    await target.answer(text, reply_markup=markup)
+
+
+async def _ask_for_product_preview(
+    target: Message, state: FSMContext, product_id: int, product_name: str, *, edit: bool = False
+) -> None:
+    await state.set_state(StockFSM.waiting_product_preview)
+    await state.update_data(mode="preview", product_id=product_id, product_name=product_name)
+    text = (
+        f"Envoie une photo ou une vidéo pour la preview de « {product_name} ».\n"
+        "Les clientes la verront en cliquant sur ce tarif dans la boutique."
+    )
+    markup = product_preview_waiting_keyboard()
     if edit:
         try:
             await target.edit_text(text, reply_markup=markup)
@@ -700,6 +735,120 @@ async def handle_stock_cancel_preview(callback: CallbackQuery, state: FSMContext
         await _ask_for_stock_file(callback.message, state, pool_name)
     else:
         await state.clear()
+
+
+@router.callback_query(F.data.startswith(CALLBACK_PREVIEW_PREFIX))
+async def handle_preview_product_pick(
+    callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
+    raw = (callback.data or "")[len(CALLBACK_PREVIEW_PREFIX) :]
+    if not raw.isdigit() or db_pool is None:
+        await callback.answer("Produit inconnu.", show_alert=True)
+        return
+    product_id = int(raw)
+    products = await list_media_products(db_pool)
+    product = next((p for p in products if p.id == product_id), None)
+    if product is None:
+        await callback.answer("Produit introuvable.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message:
+        await _ask_for_product_preview(
+            callback.message, state, product.id, product.name, edit=True
+        )
+
+
+@router.message(
+    StateFilter(StockFSM.waiting_product_preview),
+    F.photo | F.video | F.video_note | F.document,
+)
+async def handle_product_preview_media(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    product_id = data.get("product_id")
+    product_name = data.get("product_name") or "ce tarif"
+    media = _extract_stock_media(message)
+    if not product_id or media is None:
+        await message.answer("Envoie une photo ou une vidéo.")
+        return
+    kind, file_id, unique_id = media
+    await state.set_state(StockFSM.confirm_product_preview)
+    await state.update_data(kind=kind, file_id=file_id, unique_id=unique_id)
+    caption = f"Preview — {product_name}"
+    markup = product_preview_confirm_keyboard(int(product_id))
+    try:
+        if kind == "video":
+            await message.answer_video(file_id, caption=caption, reply_markup=markup)
+        else:
+            await message.answer_photo(file_id, caption=caption, reply_markup=markup)
+    except TelegramBadRequest:
+        await message.answer_document(file_id, caption=caption, reply_markup=markup)
+
+
+@router.callback_query(StateFilter(StockFSM.confirm_product_preview), F.data == CALLBACK_PREVIEW_OK)
+async def handle_product_preview_confirm(
+    callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await callback.answer("Base indisponible.", show_alert=True)
+        return
+    data = await state.get_data()
+    product_id = data.get("product_id")
+    kind = data.get("kind")
+    file_id = data.get("file_id")
+    unique_id = data.get("unique_id")
+    if not product_id or not kind or not file_id or not unique_id:
+        await callback.answer("Aperçu expiré.", show_alert=True)
+        await state.clear()
+        return
+    try:
+        name = await set_product_preview(
+            db_pool,
+            product_id=int(product_id),
+            kind=kind,
+            telegram_file_id=file_id,
+            file_unique_id=unique_id,
+        )
+        _ = name
+    except CartError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Erreur preview produit #%s", product_id)
+        await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("Preview enregistrée")
+    if callback.message:
+        await _show_stock_menu(callback.message, db_pool)
+
+
+@router.callback_query(F.data == CALLBACK_PREVIEW_NO)
+async def handle_product_preview_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    product_id = data.get("product_id")
+    product_name = data.get("product_name") or "ce tarif"
+    await callback.answer("Annulé")
+    if product_id and callback.message:
+        await _ask_for_product_preview(
+            callback.message, state, int(product_id), str(product_name)
+        )
+    else:
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith(CALLBACK_PREVIEW_CLEAR_PREFIX))
+async def handle_product_preview_clear(
+    callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
+    raw = (callback.data or "")[len(CALLBACK_PREVIEW_CLEAR_PREFIX) :]
+    if not raw.isdigit() or db_pool is None:
+        await callback.answer("Produit inconnu.", show_alert=True)
+        return
+    cleared = await clear_product_preview(db_pool, int(raw))
+    await state.clear()
+    await callback.answer("Preview effacée" if cleared else "Rien à effacer")
+    if callback.message:
+        await _show_stock_menu(callback.message, db_pool)
 
 
 @router.message(Command("grants", "rewards"))

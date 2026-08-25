@@ -28,6 +28,7 @@ from db.repository import (
     get_order,
     get_pending_order,
     get_photo_items_label,
+    get_product_preview,
     get_today_spin,
     get_call_slot_for_order,
     get_points_balance,
@@ -96,6 +97,8 @@ def _serialize_product(product: Product) -> dict:
         "duration_minutes": product.duration_minutes,
         "reward_count": product.reward_count,
         "wheel_id": product.wheel_id,
+        "has_preview": product.has_preview,
+        "preview_kind": product.preview_kind,
     }
 
 
@@ -167,6 +170,42 @@ async def get_products(request: web.Request) -> web.Response:
         return web.json_response([_serialize_product(p) for p in products])
     except Exception:
         logger.exception("Erreur lors de la récupération du catalogue")
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+
+@routes.get("/api/products/{product_id}/preview")
+async def get_product_preview_media(request: web.Request) -> web.Response:
+    """Diffuse la preview d'un produit (proxy Telegram, sans exposer le token)."""
+    pool = _get_pool(request)
+    bot: Bot = request.app["bot"]
+    try:
+        product_id = int(request.match_info["product_id"])
+    except ValueError:
+        return web.json_response({"error": "Produit invalide"}, status=400)
+
+    try:
+        preview = await get_product_preview(pool, product_id)
+    except Exception:
+        logger.exception("Erreur lecture preview #%s", product_id)
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+    if preview is None:
+        return web.json_response({"error": "Aucune preview"}, status=404)
+
+    try:
+        tg_file = await bot.get_file(preview.telegram_file_id)
+        if not tg_file.file_path:
+            return web.json_response({"error": "Fichier indisponible"}, status=404)
+        buffer = await bot.download_file(tg_file.file_path)
+        payload = buffer.read() if hasattr(buffer, "read") else bytes(buffer)
+        content_type = "video/mp4" if preview.kind == "video" else "image/jpeg"
+        return web.Response(
+            body=payload,
+            content_type=content_type,
+            headers={"Cache-Control": "private, max-age=120"},
+        )
+    except Exception:
+        logger.exception("Erreur téléchargement preview #%s", product_id)
         return web.json_response(GENERIC_ERROR_BODY, status=500)
 
 

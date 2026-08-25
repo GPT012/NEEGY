@@ -196,6 +196,14 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS wheel_id INTEGER NULL
 -- VIP retiré de la boutique (tables conservées pour l'historique).
 UPDATE products SET is_active = FALSE WHERE category = 'vip';
 
+-- Une preview boutique par produit (affichée au clic dans la Mini App).
+ALTER TABLE products ADD COLUMN IF NOT EXISTS preview_file_id TEXT NULL;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS preview_file_unique_id TEXT NULL;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS preview_kind TEXT NULL;
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_preview_kind_check;
+ALTER TABLE products ADD CONSTRAINT products_preview_kind_check
+    CHECK (preview_kind IS NULL OR preview_kind IN ('photo', 'video'));
+
 
 ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS wheel_id INTEGER NULL
     REFERENCES wheels(id);

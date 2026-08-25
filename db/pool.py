@@ -32,8 +32,12 @@ _LEGACY_PRODUCT_NAMES = ("Audit rapide", "Accompagnement mensuel", "Formation ex
 
 # name, description, price_cents, currency, category (photo|video)
 _SEED_MEDIA = [
-    ("Photo", "Une photo exclusive, envoyée dès le paiement.", 1000, "EUR", "photo"),
-    ("Vidéo", "Une vidéo exclusive, envoyée dès le paiement.", 2000, "EUR", "video"),
+    ("Photo 5 €", "Une photo exclusive, envoyée dès le paiement.", 500, "EUR", "photo"),
+    ("Photo 10 €", "Une photo exclusive, envoyée dès le paiement.", 1000, "EUR", "photo"),
+    ("Photo 20 €", "Une photo exclusive, envoyée dès le paiement.", 2000, "EUR", "photo"),
+    ("Vidéo 10 €", "Une vidéo exclusive, envoyée dès le paiement.", 1000, "EUR", "video"),
+    ("Vidéo 20 €", "Une vidéo exclusive, envoyée dès le paiement.", 2000, "EUR", "video"),
+    ("Vidéo 30 €", "Une vidéo exclusive, envoyée dès le paiement.", 3000, "EUR", "video"),
 ]
 
 _SEED_CALLS = [
@@ -161,6 +165,8 @@ async def _retire_legacy_products(connection: asyncpg.Connection) -> None:
         "Pack Complet",
         "Pack Exclusif",
         "VIP Mensuel",
+        "Photo",
+        "Vidéo",
     ]
     result = await connection.execute(
         "UPDATE products SET is_active = FALSE WHERE name = ANY($1::text[]) AND is_active = TRUE",
@@ -223,6 +229,16 @@ async def _seed_media_category(connection: asyncpg.Connection) -> None:
         WHERE category IN ('photo', 'video') AND is_active = TRUE
           AND (reward_count IS NULL OR reward_count <> 1)
         """
+    )
+    seed_names = [name for name, *_rest in _SEED_MEDIA]
+    await connection.execute(
+        """
+        UPDATE products
+        SET is_active = FALSE
+        WHERE category IN ('photo', 'video') AND is_active = TRUE
+          AND name <> ALL($1::text[])
+        """,
+        seed_names,
     )
     logger.info("Catalogue photo/vidéo synchronisé (%d article(s))", len(_SEED_MEDIA))
 

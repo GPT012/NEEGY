@@ -33,6 +33,17 @@ class Product:
     duration_minutes: int | None
     reward_count: int | None = None
     wheel_id: int | None = None
+    has_preview: bool = False
+    preview_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class ProductPreview:
+    product_id: int
+    name: str
+    category: str
+    kind: str
+    telegram_file_id: str
 
 
 @dataclass(frozen=True)
@@ -215,7 +226,7 @@ async def list_products(pool: asyncpg.Pool, category: str | None = None) -> list
         rows = await pool.fetch(
             """
             SELECT id, name, description, price_cents, currency, category, duration_minutes,
-                   reward_count, wheel_id
+                   reward_count, wheel_id, preview_file_id, preview_kind
             FROM products
             WHERE is_active = TRUE
             ORDER BY category, price_cents
@@ -225,7 +236,7 @@ async def list_products(pool: asyncpg.Pool, category: str | None = None) -> list
         rows = await pool.fetch(
             """
             SELECT id, name, description, price_cents, currency, category, duration_minutes,
-                   reward_count, wheel_id
+                   reward_count, wheel_id, preview_file_id, preview_kind
             FROM products
             WHERE is_active = TRUE AND category = $1
             ORDER BY price_cents
@@ -236,6 +247,12 @@ async def list_products(pool: asyncpg.Pool, category: str | None = None) -> list
 
 
 def _row_to_product(row) -> Product:
+    has_preview = False
+    preview_kind = None
+    if "preview_file_id" in row.keys():
+        has_preview = bool(row["preview_file_id"])
+    if "preview_kind" in row.keys():
+        preview_kind = row["preview_kind"]
     return Product(
         id=row["id"],
         name=row["name"],
@@ -246,7 +263,87 @@ def _row_to_product(row) -> Product:
         duration_minutes=row["duration_minutes"],
         reward_count=row["reward_count"] if "reward_count" in row.keys() else None,
         wheel_id=row["wheel_id"] if "wheel_id" in row.keys() else None,
+        has_preview=has_preview,
+        preview_kind=preview_kind,
     )
+
+
+async def list_media_products(pool: asyncpg.Pool) -> list[Product]:
+    """Produits photo/vidéo actifs (pour configurer les previews admin)."""
+    rows = await pool.fetch(
+        """
+        SELECT id, name, description, price_cents, currency, category, duration_minutes,
+               reward_count, wheel_id, preview_file_id, preview_kind
+        FROM products
+        WHERE is_active = TRUE AND category IN ('photo', 'video')
+        ORDER BY category, price_cents
+        """
+    )
+    return [_row_to_product(row) for row in rows]
+
+
+async def set_product_preview(
+    pool: asyncpg.Pool,
+    *,
+    product_id: int,
+    kind: str,
+    telegram_file_id: str,
+    file_unique_id: str,
+) -> str:
+    """Attache une preview à un produit photo/vidéo. Retourne le nom du produit."""
+    if kind not in ("photo", "video"):
+        raise CartError("Preview : photo ou vidéo attendue.")
+    row = await pool.fetchrow(
+        """
+        UPDATE products
+        SET preview_file_id = $2,
+            preview_file_unique_id = $3,
+            preview_kind = $4
+        WHERE id = $1 AND is_active = TRUE AND category IN ('photo', 'video')
+        RETURNING name
+        """,
+        product_id,
+        telegram_file_id,
+        file_unique_id,
+        kind,
+    )
+    if row is None:
+        raise CartError("Produit introuvable.")
+    return row["name"]
+
+
+async def clear_product_preview(pool: asyncpg.Pool, product_id: int) -> bool:
+    result = await pool.execute(
+        """
+        UPDATE products
+        SET preview_file_id = NULL, preview_file_unique_id = NULL, preview_kind = NULL
+        WHERE id = $1 AND category IN ('photo', 'video')
+        """,
+        product_id,
+    )
+    return result.endswith(" 1")
+
+
+async def get_product_preview(pool: asyncpg.Pool, product_id: int) -> ProductPreview | None:
+    row = await pool.fetchrow(
+        """
+        SELECT id, name, category, preview_kind, preview_file_id
+        FROM products
+        WHERE id = $1 AND is_active = TRUE AND category IN ('photo', 'video')
+          AND preview_file_id IS NOT NULL AND preview_kind IS NOT NULL
+        """,
+        product_id,
+    )
+    if row is None:
+        return None
+    return ProductPreview(
+        product_id=row["id"],
+        name=row["name"],
+        category=row["category"],
+        kind=row["preview_kind"],
+        telegram_file_id=row["preview_file_id"],
+    )
+
 
 
 # --------------------------------------------------------------------------
