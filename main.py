@@ -255,6 +255,9 @@ def run_webhook() -> None:
     app["paypal_url"] = config.paypal_url
     app["bank_iban"] = config.bank_iban
     app["bank_holder"] = config.bank_holder
+    app["crypto_solana"] = config.crypto_solana
+    app["crypto_ethereum"] = config.crypto_ethereum
+    app["crypto_bitcoin"] = config.crypto_bitcoin
     app["dispatcher"] = dispatcher
     app.on_startup.append(_on_app_startup)
     app.on_cleanup.append(_on_app_cleanup)

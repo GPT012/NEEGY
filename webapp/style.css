@@ -1202,6 +1202,29 @@ html[data-theme="dark"] .pay-card h2 {
   margin-top: 12px;
 }
 
+.crypto-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.crypto-row {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--gold-soft);
+  border: 1px solid var(--gold-border);
+  text-align: left;
+}
+
+.crypto-row-label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold-deep);
+}
+
 /* ---------------------------------------------------- Barre d'onglets */
 
 .tab-bar {

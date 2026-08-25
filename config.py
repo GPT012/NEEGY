@@ -94,6 +94,9 @@ class Config:
     paypal_url: str | None
     bank_iban: str | None
     bank_holder: str | None
+    crypto_solana: str | None
+    crypto_ethereum: str | None
+    crypto_bitcoin: str | None
 
     log_level: str
     log_file_path: str
@@ -165,6 +168,12 @@ def load_config() -> Config:
         paypal_url=paypal_url,
         bank_iban=_get_str("BANK_IBAN") or "FR76 2823 3000 0106 8425 4424 364",
         bank_holder=_get_str("BANK_HOLDER") or "Selma Kouassi",
+        crypto_solana=_get_str("CRYPTO_SOLANA")
+        or "36Swt8qwJyYx1ufb5rdhFSPyPQGG7uqYQNYggpyrE4f9",
+        crypto_ethereum=_get_str("CRYPTO_ETHEREUM")
+        or "0xeFc510b0536E940046F8689f34E2Ab270c942B91",
+        crypto_bitcoin=_get_str("CRYPTO_BITCOIN")
+        or "bc1p4902hhgku70353h55dzhwjn75zzrgjekvrzm3xpmd8nl2zlac2pszfwquf",
         log_level=_get_str("LOG_LEVEL", "INFO"),
         log_file_path=_get_str("LOG_FILE_PATH", "logs/errors.log"),
     )

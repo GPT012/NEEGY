@@ -77,6 +77,7 @@
       <button type="button" id="pay-points" class="btn btn-gold btn-block" hidden>Payer avec mes points</button>
       <p class="pay-hint">Sinon PayPal ou virement. Indique le libellé pour qu’on retrouve ta commande.</p>
       <a id="pay-paypal" class="btn btn-gold btn-block" hidden target="_blank" rel="noopener noreferrer">Payer avec PayPal</a>
+      <button type="button" id="pay-crypto-open" class="btn btn-ghost btn-block" hidden>Payer en crypto</button>
       <div id="pay-bank" class="pay-bank" hidden>
         <p class="pay-bank-label">Virement</p>
         <p id="pay-holder" class="pay-holder"></p>
@@ -84,6 +85,16 @@
         <p id="pay-ref" class="pay-ref"></p>
       </div>
       <button type="button" id="pay-done" class="btn btn-ghost btn-block">C’est noté</button>
+    </div>
+  </div>
+
+  <div id="crypto-sheet" class="pay-sheet" hidden>
+    <div class="pay-card">
+      <p class="pay-kicker">Crypto</p>
+      <h2>Adresses</h2>
+      <p class="pay-hint">Tap une adresse pour la copier. Indique le libellé de commande.</p>
+      <div id="crypto-list" class="crypto-list"></div>
+      <button type="button" id="crypto-back" class="btn btn-ghost btn-block">Retour</button>
     </div>
   </div>
 

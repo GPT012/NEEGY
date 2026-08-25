@@ -340,12 +340,15 @@ def _payment_payload(request: web.Request) -> dict:
         "paypal_url": request.app.get("paypal_url"),
         "bank_iban": request.app.get("bank_iban"),
         "bank_holder": request.app.get("bank_holder"),
+        "crypto_solana": request.app.get("crypto_solana"),
+        "crypto_ethereum": request.app.get("crypto_ethereum"),
+        "crypto_bitcoin": request.app.get("crypto_bitcoin"),
         "reference": None,
     }
 
 
 def _payment_message_lines(payment: dict) -> list[str]:
-    lines = ["\nPaiement — PayPal ou virement :"]
+    lines = ["\nPaiement — PayPal, virement ou crypto :"]
     if payment.get("paypal_url"):
         lines.append(f"\nPayPal :\n{payment['paypal_url']}")
     holder = payment.get("bank_holder")
@@ -356,9 +359,20 @@ def _payment_message_lines(payment: dict) -> list[str]:
             lines.append(f"Nom : {holder}")
         if iban:
             lines.append(f"IBAN : {iban}")
+    sol = payment.get("crypto_solana")
+    eth = payment.get("crypto_ethereum")
+    btc = payment.get("crypto_bitcoin")
+    if sol or eth or btc:
+        lines.append("\nCrypto :")
+        if sol:
+            lines.append(f"Solana :\n{sol}")
+        if eth:
+            lines.append(f"Ethereum :\n{eth}")
+        if btc:
+            lines.append(f"Bitcoin :\n{btc}")
     if payment.get("reference"):
         lines.append(f"Libellé : {payment['reference']}")
-    if not payment.get("paypal_url") and not iban:
+    if not payment.get("paypal_url") and not iban and not sol and not eth and not btc:
         lines.append("\nRéponds à ce message pour convenir du règlement.")
     return lines
 

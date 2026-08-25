@@ -13,6 +13,10 @@
   const payHeadingEl = document.getElementById("pay-heading");
   const payTotalEl = document.getElementById("pay-total");
   const payPaypalEl = document.getElementById("pay-paypal");
+  const payCryptoOpenEl = document.getElementById("pay-crypto-open");
+  const cryptoSheetEl = document.getElementById("crypto-sheet");
+  const cryptoListEl = document.getElementById("crypto-list");
+  const cryptoBackEl = document.getElementById("crypto-back");
   const payBankEl = document.getElementById("pay-bank");
   const payHolderEl = document.getElementById("pay-holder");
   const payIbanCopyEl = document.getElementById("pay-iban-copy");
@@ -557,6 +561,13 @@
       payPointsEl.textContent = `Payer avec ${needed} points`;
     }
 
+    if (payCryptoOpenEl) {
+      const hasCrypto = Boolean(
+        payment.crypto_solana || payment.crypto_ethereum || payment.crypto_bitcoin
+      );
+      payCryptoOpenEl.hidden = !hasCrypto;
+    }
+
     if (payment.paypal_url) {
       payPaypalEl.hidden = false;
       payPaypalEl.href = payment.paypal_url;
@@ -792,6 +803,45 @@
       tg?.HapticFeedback?.impactOccurred?.("light");
     });
 
+    function fillCryptoSheet(payment) {
+      if (!cryptoListEl) return;
+      cryptoListEl.innerHTML = "";
+      const rows = [
+        ["Solana", payment.crypto_solana],
+        ["Ethereum", payment.crypto_ethereum],
+        ["Bitcoin", payment.crypto_bitcoin],
+      ];
+      for (const [label, address] of rows) {
+        if (!address) continue;
+        const wrap = document.createElement("div");
+        wrap.className = "crypto-row";
+        const title = document.createElement("p");
+        title.className = "crypto-row-label";
+        title.textContent = label;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pay-iban";
+        btn.textContent = address;
+        btn.addEventListener("click", async () => {
+          const copied = await copyText(address);
+          showToast(copied ? `${label} copié` : "Impossible de copier", copied ? "success" : undefined);
+          tg?.HapticFeedback?.impactOccurred?.("light");
+        });
+        wrap.appendChild(title);
+        wrap.appendChild(btn);
+        cryptoListEl.appendChild(wrap);
+      }
+    }
+
+    payCryptoOpenEl?.addEventListener("click", () => {
+      fillCryptoSheet((lastPayOrder && lastPayOrder.payment) || {});
+      if (cryptoSheetEl) cryptoSheetEl.hidden = false;
+    });
+
+    cryptoBackEl?.addEventListener("click", () => {
+      if (cryptoSheetEl) cryptoSheetEl.hidden = true;
+    });
+
     payPointsEl?.addEventListener("click", async () => {
       if (!lastPayOrder?.order_id) return;
       payPointsEl.disabled = true;
@@ -803,6 +853,7 @@
         payPaypalEl.hidden = true;
         payBankEl.hidden = true;
         payPointsEl.hidden = true;
+        if (payCryptoOpenEl) payCryptoOpenEl.hidden = true;
         if (payPointsHintEl) {
           payPointsHintEl.hidden = false;
           payPointsHintEl.textContent = `Payé avec ${paid.points_spent} points. Solde : ${paid.points_balance} pts.`;
@@ -819,6 +870,7 @@
 
     payDoneEl.addEventListener("click", () => {
       paySheetEl.hidden = true;
+      if (cryptoSheetEl) cryptoSheetEl.hidden = true;
     });
 
     switchTab("shop");
