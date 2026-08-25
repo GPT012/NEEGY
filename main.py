@@ -22,6 +22,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonWebApp, WebAppInfo
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
@@ -54,12 +55,15 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="cancel", description="Annuler une commande pending"),
     BotCommand(command="slots", description="Créneaux d'appel"),
     BotCommand(command="addslot", description="Ajouter un créneau"),
+    BotCommand(command="stock", description="Remplir photos et vidéos"),
+    BotCommand(command="grants", description="Qui a reçu quel lot"),
+    BotCommand(command="fulfill", description="Relancer l'envoi d'un lot"),
     *BOT_COMMANDS,
 ]
 
 
 def create_dispatcher() -> Dispatcher:
-    dispatcher = Dispatcher()
+    dispatcher = Dispatcher(storage=MemoryStorage())
 
     # Toujours présent (même None) : les handlers admin déclarent db_pool en
     # paramètre, l'injection aiogram échouerait si la clé était absente du

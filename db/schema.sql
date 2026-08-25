@@ -180,3 +180,67 @@ ALTER TABLE order_items ADD COLUMN IF NOT EXISTS call_slot_id INTEGER NULL
 
 CREATE INDEX IF NOT EXISTS idx_orders_user_pending
     ON orders (user_id) WHERE status = 'pending';
+
+-- Roues : quotidienne gratuite + deux payantes. Les lots média sont des
+-- assets Telegram (file_id) attribués une seule fois par cliente.
+CREATE TABLE IF NOT EXISTS wheels (
+    id          SERIAL PRIMARY KEY,
+    slug        TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
+    price_cents INTEGER NOT NULL DEFAULT 0 CHECK (price_cents >= 0),
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_category_check;
+ALTER TABLE products ADD CONSTRAINT products_category_check
+    CHECK (category IN ('photo', 'call', 'vip', 'wheel'));
+ALTER TABLE products ADD COLUMN IF NOT EXISTS reward_count INTEGER NULL
+    CHECK (reward_count IS NULL OR reward_count > 0);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS wheel_id INTEGER NULL
+    REFERENCES wheels(id);
+
+ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS wheel_id INTEGER NULL
+    REFERENCES wheels(id);
+ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS content_pool TEXT NULL;
+ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS call_duration_minutes INTEGER NULL;
+ALTER TABLE wheel_prizes DROP CONSTRAINT IF EXISTS wheel_prizes_kind_check;
+ALTER TABLE wheel_prizes ADD CONSTRAINT wheel_prizes_kind_check
+    CHECK (kind IN ('manual', 'discount', 'points', 'photo', 'video', 'call'));
+
+ALTER TABLE wheel_spins ADD COLUMN IF NOT EXISTS wheel_id INTEGER NULL
+    REFERENCES wheels(id);
+ALTER TABLE wheel_spins ADD COLUMN IF NOT EXISTS order_id INTEGER NULL
+    REFERENCES orders(id) ON DELETE SET NULL;
+ALTER TABLE wheel_spins ADD COLUMN IF NOT EXISTS is_daily BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE wheel_spins DROP CONSTRAINT IF EXISTS wheel_spins_user_id_spin_date_key;
+DROP INDEX IF EXISTS wheel_spins_user_id_spin_date_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wheel_spins_daily
+    ON wheel_spins (user_id, spin_date) WHERE is_daily;
+
+CREATE TABLE IF NOT EXISTS reward_assets (
+    id                SERIAL PRIMARY KEY,
+    pool              TEXT NOT NULL,
+    kind              TEXT NOT NULL CHECK (kind IN ('photo', 'video')),
+    telegram_file_id  TEXT NOT NULL,
+    file_unique_id    TEXT NOT NULL,
+    caption           TEXT NOT NULL DEFAULT '',
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (pool, file_unique_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reward_assets_pool
+    ON reward_assets (pool) WHERE is_active = TRUE;
+
+CREATE TABLE IF NOT EXISTS reward_grants (
+    id         SERIAL PRIMARY KEY,
+    user_id    BIGINT NOT NULL,
+    asset_id   INTEGER NOT NULL REFERENCES reward_assets(id),
+    order_id   INTEGER NULL REFERENCES orders(id) ON DELETE SET NULL,
+    source     TEXT NOT NULL CHECK (source IN ('wheel', 'booster')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reward_grants_order_id ON reward_grants (order_id);
+CREATE INDEX IF NOT EXISTS idx_reward_grants_user_id ON reward_grants (user_id);

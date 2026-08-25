@@ -40,46 +40,95 @@
   };
   const pageMeta = {
     shop: { title: "Le deck", subtitle: "Choisis ton booster. Chaque pack a sa rareté." },
-    wheel: { title: "La roue", subtitle: "Un tour. Ensuite, on verra." },
+    wheel: { title: "Les roues", subtitle: "Une quotidienne. Deux payantes." },
     vip: { title: "Le cercle", subtitle: "L'accès discret, sans ostentation." },
   };
   const BOOSTER_TIERS = [
     { rarity: "COMMON", energy: "feuille", cards: "3 cartes" },
     { rarity: "UNCOMMON", energy: "vague", cards: "8 cartes" },
-    { rarity: "RARE", energy: "éclair", cards: "secret" },
+    { rarity: "RARE", energy: "éclair", cards: "12 cartes" },
   ];
   const CALL_TIERS = {
     15: { rarity: "FIRE", energy: "feu" },
     30: { rarity: "PSY", energy: "esprit" },
   };
 
-  const WHEEL_SLICES = [2, 4, 2, 4, 2, 9, 2, 4, 2, 4];
-  const WHEEL_GOLD_SLICES = new Set([1, 3, 7, 9]);
+  const wheelSwitchEl = document.getElementById("wheel-switch");
   const SPIN_DURATION_MS = 3400;
+  /** @type {Array<object>} */
+  let wheelsCatalog = [];
+  let selectedWheelSlug = "free";
+
+  function currentWheel() {
+    return wheelsCatalog.find((wheel) => wheel.slug === selectedWheelSlug) || wheelsCatalog[0];
+  }
+
+  function currentSlices() {
+    const wheel = currentWheel();
+    if (wheel?.slices?.length) return wheel.slices;
+    return [
+      { label: "2", kind: "points" },
+      { label: "4", kind: "points" },
+      { label: "2", kind: "points" },
+      { label: "4", kind: "points" },
+      { label: "2", kind: "points" },
+      { label: "9", kind: "points" },
+      { label: "2", kind: "points" },
+      { label: "4", kind: "points" },
+      { label: "2", kind: "points" },
+      { label: "4", kind: "points" },
+    ];
+  }
 
   function paintWheel() {
     if (!wheelGraphicEl) return;
+    const slices = currentSlices();
     wheelGraphicEl.innerHTML = "";
-    WHEEL_SLICES.forEach((points, index) => {
+    slices.forEach((slice, index) => {
       const face = document.createElement("span");
       const classes = ["wheel-face"];
-      if (points === 9) classes.push("wheel-face-rare");
-      if (WHEEL_GOLD_SLICES.has(index)) classes.push("wheel-face-ink");
+      if (slice.kind === "video" || slice.label === "9" || slice.label === "36") {
+        classes.push("wheel-face-rare");
+      }
+      const isLight = index % 2 === 1;
+      if (isLight && slice.kind === "points") classes.push("wheel-face-ink");
       face.className = classes.join(" ");
-      const deg = index * 36 + 18;
+      const deg = index * (360 / slices.length) + 180 / slices.length;
       face.style.transform = `rotate(${deg}deg) translateY(-82px)`;
-      face.textContent = String(points);
+      face.textContent = slice.label === "photo" ? "◆" : slice.label === "vidéo" ? "▶" : slice.label === "cam" ? "☎" : slice.label;
       wheelGraphicEl.appendChild(face);
     });
   }
 
-  function sliceIndexForPoints(points) {
+  function sliceIndexForPrize(prize) {
+    const slices = currentSlices();
     const matches = [];
-    WHEEL_SLICES.forEach((value, index) => {
-      if (value === Number(points)) matches.push(index);
+    slices.forEach((slice, index) => {
+      if (prize.kind && slice.kind === prize.kind) {
+        if (prize.kind === "points" && String(slice.label) === String(prize.points_amount || prize.label)) {
+          matches.push(index);
+        } else if (prize.kind !== "points") {
+          matches.push(index);
+        }
+      } else if (String(slice.label) === String(prize.label || prize.points_amount)) {
+        matches.push(index);
+      }
     });
     if (!matches.length) return 0;
     return matches[Math.floor(Math.random() * matches.length)];
+  }
+
+  function animateSpinToPrize(prize) {
+    const slices = currentSlices();
+    const step = 360 / Math.max(slices.length, 1);
+    const index = sliceIndexForPrize(prize);
+    const jitter = (Math.random() - 0.5) * Math.min(16, step / 2);
+    const target = (360 - (index * step + step / 2) + jitter + 360) % 360;
+    const current = ((wheelRotation % 360) + 360) % 360;
+    let delta = (target - current + 360) % 360;
+    if (delta < 80) delta += 360;
+    wheelRotation += 4 * 360 + delta;
+    wheelGraphicEl.style.transform = `rotate(${wheelRotation}deg)`;
   }
 
   /** @type {Array<object>} */
@@ -658,21 +707,72 @@
   }
 
   // ------------------------------------------------------------------
-  // Roue quotidienne
+  // Roues
   // ------------------------------------------------------------------
+
+  function renderWheelSwitch() {
+    if (!wheelSwitchEl) return;
+    wheelSwitchEl.innerHTML = "";
+    const fallback = [
+      { slug: "free", name: "Quotidienne", price_cents: 0 },
+      { slug: "rose", name: "Rose", price_cents: 500 },
+      { slug: "nuit", name: "Nuit", price_cents: 2000 },
+    ];
+    const list = wheelsCatalog.length ? wheelsCatalog : fallback;
+    list.forEach((wheel) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `wheel-switch-btn${wheel.slug === selectedWheelSlug ? " active" : ""}`;
+      const price =
+        wheel.price_cents > 0 ? formatPrice(wheel.price_cents, "EUR") : "gratuite";
+      btn.innerHTML = `<strong>${escapeHtml(wheel.name)}</strong>${escapeHtml(price)}`;
+      btn.addEventListener("click", () => {
+        selectedWheelSlug = wheel.slug;
+        wheelRotation = 0;
+        if (wheelGraphicEl) wheelGraphicEl.style.transform = "rotate(0deg)";
+        renderWheelSwitch();
+        paintWheel();
+        syncWheelCta();
+        tg?.HapticFeedback?.selectionChanged?.();
+      });
+      wheelSwitchEl.appendChild(btn);
+    });
+  }
+
+  function syncWheelCta() {
+    const wheel = currentWheel();
+    if (!wheelSpinBtn || !wheelStatusEl) return;
+    if (!wheel || wheel.slug === "free") {
+      return;
+    }
+    wheelSpinBtn.disabled = false;
+    wheelSpinBtn.textContent = `Tenter · ${formatPrice(wheel.price_cents, "EUR")}`;
+    wheelStatusEl.textContent = "Tu paies. Ensuite, on voit.";
+  }
 
   async function refreshWheelStatus() {
     wheelSpinBtn.disabled = true;
     try {
-      const status = await apiFetch("/api/wheel/status");
-      setPointsBalance(status.points_balance);
-      if (status.can_spin) {
-        wheelStatusEl.textContent = "Personne ne sait ce qui va tomber.";
-        wheelSpinBtn.disabled = false;
-        wheelSpinBtn.textContent = "Tourner la roue";
+      const payload = await apiFetch("/api/wheels");
+      wheelsCatalog = payload.wheels || [];
+      setPointsBalance(payload.points_balance);
+      if (!wheelsCatalog.some((wheel) => wheel.slug === selectedWheelSlug)) {
+        selectedWheelSlug = "free";
+      }
+      renderWheelSwitch();
+      paintWheel();
+      const selected = currentWheel();
+      if (!selected || selected.slug === "free") {
+        if (selected?.can_spin) {
+          wheelStatusEl.textContent = "Personne ne sait ce qui va tomber.";
+          wheelSpinBtn.disabled = false;
+          wheelSpinBtn.textContent = "Tourner la roue";
+        } else {
+          wheelStatusEl.textContent = "C'est joué pour aujourd'hui. Reviens demain.";
+          wheelSpinBtn.textContent = "Reviens demain";
+        }
       } else {
-        wheelStatusEl.textContent = "C'est joué pour aujourd'hui. Reviens demain.";
-        wheelSpinBtn.textContent = "Reviens demain";
+        syncWheelCta();
       }
     } catch (err) {
       wheelStatusEl.textContent = "Impossible de charger la roue pour le moment.";
@@ -680,18 +780,39 @@
     }
   }
 
+  async function buyPaidSpin(wheel) {
+    if (!wheel.product_id) {
+      showToast("Cette roue n'est pas encore ouverte.");
+      return;
+    }
+    if (shopIsLocked()) return;
+    wheelSpinBtn.disabled = true;
+    try {
+      const cart = await apiFetch("/api/cart", {
+        method: "POST",
+        body: JSON.stringify({ product_id: wheel.product_id, quantity: 1 }),
+      });
+      applyCart(cart);
+      renderShop();
+      await handleCheckout();
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      wheelSpinBtn.disabled = false;
+      syncWheelCta();
+    }
+  }
+
   function animateSpinTo(points) {
-    const index = sliceIndexForPoints(points);
-    const jitter = (Math.random() - 0.5) * 16;
-    const target = (342 - index * 36 + jitter + 360) % 360;
-    const current = ((wheelRotation % 360) + 360) % 360;
-    let delta = (target - current + 360) % 360;
-    if (delta < 80) delta += 360;
-    wheelRotation += 4 * 360 + delta;
-    wheelGraphicEl.style.transform = `rotate(${wheelRotation}deg)`;
+    animateSpinToPrize({ kind: "points", points_amount: points, label: String(points) });
   }
 
   wheelSpinBtn.addEventListener("click", async () => {
+    const wheel = currentWheel();
+    if (wheel && wheel.slug !== "free") {
+      await buyPaidSpin(wheel);
+      return;
+    }
     wheelSpinBtn.disabled = true;
     wheelStatusEl.textContent = "Encore un instant.";
     tg?.HapticFeedback?.impactOccurred?.("medium");
@@ -705,7 +826,7 @@
       return;
     }
 
-    animateSpinTo(prize.points_amount);
+    animateSpinToPrize(prize);
     await new Promise((resolve) => setTimeout(resolve, SPIN_DURATION_MS + 280));
 
     tg?.HapticFeedback?.notificationOccurred?.("success");

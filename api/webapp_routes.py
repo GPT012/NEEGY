@@ -37,6 +37,7 @@ from db.repository import (
     list_active_vip_plans,
     list_available_call_slots,
     list_products,
+    list_wheels,
     remove_cart_item,
     pay_order_with_points,
     points_needed_for_cents,
@@ -44,6 +45,7 @@ from db.repository import (
     upsert_cart_item,
 )
 from keyboards.admin import pay_received_keyboard
+from handlers.rewards import admin_fulfillment_lines, deliver_fulfillment
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,7 +55,7 @@ routes = web.RouteTableDef()
 INIT_DATA_HEADER = "X-Telegram-Init-Data"
 GENERIC_ERROR_BODY = {"error": "Une erreur est survenue. Merci de réessayer plus tard."}
 UNAVAILABLE_BODY = {"error": "La boutique est momentanément indisponible. Réessaie dans quelques minutes."}
-VALID_CATEGORIES = {"photo", "call", "vip"}
+VALID_CATEGORIES = {"photo", "call", "vip", "wheel"}
 
 
 def _get_pool(request: web.Request) -> asyncpg.Pool:
@@ -96,6 +98,8 @@ def _serialize_product(product: Product) -> dict:
         "currency": product.currency,
         "category": product.category,
         "duration_minutes": product.duration_minutes,
+        "reward_count": product.reward_count,
+        "wheel_id": product.wheel_id,
     }
 
 
@@ -150,6 +154,8 @@ def _serialize_wheel_prize(prize: WheelPrize) -> dict:
         "kind": prize.kind,
         "discount_percent": prize.discount_percent,
         "points_amount": prize.points_amount,
+        "content_pool": prize.content_pool,
+        "weight": prize.weight,
     }
 
 
@@ -253,6 +259,36 @@ async def delete_cart_item(request: web.Request) -> web.Response:
         return web.json_response(await _cart_payload(request, user_id))
     except Exception:
         logger.exception("Erreur lors de la suppression d'un article pour user_id=%s", user_id)
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+
+@routes.get("/api/wheels")
+async def get_wheels(request: web.Request) -> web.Response:
+    user_id = _authenticate(request)
+    pool = _get_pool(request)
+    try:
+        wheels = await list_wheels(pool)
+        today = await get_today_spin(pool, user_id)
+        balance = await get_points_balance(pool, user_id)
+        payload = []
+        for wheel in wheels:
+            slices = []
+            for prize in wheel.prizes:
+                for _ in range(max(1, prize.weight)):
+                    slices.append({"label": prize.label, "kind": prize.kind})
+            payload.append(
+                {
+                    "slug": wheel.slug,
+                    "name": wheel.name,
+                    "price_cents": wheel.price_cents,
+                    "product_id": wheel.product_id,
+                    "slices": slices,
+                    "can_spin": wheel.slug == "free" and today is None,
+                }
+            )
+        return web.json_response({"wheels": payload, "points_balance": balance})
+    except Exception:
+        logger.exception("Erreur GET /api/wheels user_id=%s", user_id)
         return web.json_response(GENERIC_ERROR_BODY, status=500)
 
 
@@ -493,7 +529,7 @@ async def pay_with_points(request: web.Request) -> web.Response:
         return web.json_response({"error": "Commande invalide"}, status=400)
 
     try:
-        points_spent, balance, slot_warning = await pay_order_with_points(pool, user_id, order_id)
+        points_spent, balance, fulfillment = await pay_order_with_points(pool, user_id, order_id)
     except CartError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except Exception:
@@ -509,13 +545,15 @@ async def pay_with_points(request: web.Request) -> web.Response:
                 f"🎉 Ton abonnement VIP « {vip_status.plan_name} » est activé jusqu'au "
                 f"{vip_status.expires_at:%d/%m/%Y} !",
             )
+        await deliver_fulfillment(bot, user_id, fulfillment)
         call_slot = await get_call_slot_for_order(pool, order_id)
-        if call_slot is not None:
+        if call_slot is not None and fulfillment.call_slot is None:
             await bot.send_message(
                 user_id,
                 f"📞 Ton appel du {call_slot.start_at:%d/%m/%Y à %H:%M} UTC est confirmé !",
             )
-        if vip_status is None and call_slot is None:
+        delivered = bool(fulfillment.assets or fulfillment.points_amount or fulfillment.call_slot)
+        if vip_status is None and call_slot is None and not delivered:
             await bot.send_message(
                 user_id,
                 f"✅ Commande #{order_id} payée avec {points_spent} points. Merci !",
@@ -525,15 +563,14 @@ async def pay_with_points(request: web.Request) -> web.Response:
 
     if admin_user_id and order is not None:
         who = _who_label(order.customer_name, order.telegram_username, user_id)
-        extra = ""
+        extra_lines = admin_fulfillment_lines(fulfillment)
+        extra = ("\n" + "\n".join(extra_lines)) if extra_lines else ""
         try:
             photo_label = await get_photo_items_label(pool, order_id)
-            if photo_label:
-                extra = f"\nÀ envoyer : {photo_label} — {who}"
+            if photo_label and not fulfillment.shipped_complete:
+                extra += f"\nÀ envoyer : {photo_label} — {who}"
         except Exception:
             logger.exception("Impossible de lire les photos de la commande #%s", order_id)
-        if slot_warning:
-            extra += f"\n⚠ {slot_warning}"
         try:
             await bot.send_message(
                 admin_user_id,

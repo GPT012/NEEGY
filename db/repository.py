@@ -31,6 +31,8 @@ class Product:
     currency: str
     category: str
     duration_minutes: int | None
+    reward_count: int | None = None
+    wheel_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,76 @@ class WheelPrize:
     kind: str
     discount_percent: int | None
     points_amount: int | None = None
+    content_pool: str | None = None
+    call_duration_minutes: int | None = None
+    weight: int = 1
+
+
+@dataclass(frozen=True)
+class WheelInfo:
+    id: int
+    slug: str
+    name: str
+    price_cents: int
+    product_id: int | None
+    prizes: tuple[WheelPrize, ...]
+
+
+@dataclass(frozen=True)
+class RewardAsset:
+    id: int
+    pool: str
+    kind: str
+    telegram_file_id: str
+    caption: str
+
+
+@dataclass
+class FulfillmentResult:
+    warnings: list[str]
+    prize_label: str | None = None
+    prize_kind: str | None = None
+    points_amount: int | None = None
+    assets: list[RewardAsset] | None = None
+    call_slot: CallSlot | None = None
+    shipped_complete: bool = False
+    needs_manual_ship: bool = False
+
+    def __post_init__(self) -> None:
+        if self.assets is None:
+            self.assets = []
+
+
+@dataclass(frozen=True)
+class RewardGrantRow:
+    created_at: datetime
+    user_id: int
+    pool: str
+    kind: str
+    source: str
+    order_id: int | None
+    caption: str
+
+
+VALID_REWARD_POOLS = {
+    "wheel5_photo": "photo",
+    "wheel5_video": "video",
+    "wheel20_video": "video",
+    "booster_10": "photo",
+    "booster_20": "photo",
+    "booster_30": "photo",
+}
+
+REWARD_POOL_LABELS = {
+    "wheel5_photo": "Rose · photos",
+    "wheel5_video": "Rose · vidéos",
+    "wheel20_video": "Nuit · vidéos",
+    "booster_10": "Pack 10 €",
+    "booster_20": "Pack 20 €",
+    "booster_30": "Pack 30 €",
+}
+
+_BOOSTER_POOL_BY_COUNT = {3: "booster_10", 8: "booster_20", 12: "booster_30"}
 
 
 @dataclass(frozen=True)
@@ -141,7 +213,8 @@ async def list_products(pool: asyncpg.Pool, category: str | None = None) -> list
     if category is None:
         rows = await pool.fetch(
             """
-            SELECT id, name, description, price_cents, currency, category, duration_minutes
+            SELECT id, name, description, price_cents, currency, category, duration_minutes,
+                   reward_count, wheel_id
             FROM products
             WHERE is_active = TRUE
             ORDER BY category, price_cents
@@ -150,7 +223,8 @@ async def list_products(pool: asyncpg.Pool, category: str | None = None) -> list
     else:
         rows = await pool.fetch(
             """
-            SELECT id, name, description, price_cents, currency, category, duration_minutes
+            SELECT id, name, description, price_cents, currency, category, duration_minutes,
+                   reward_count, wheel_id
             FROM products
             WHERE is_active = TRUE AND category = $1
             ORDER BY price_cents
@@ -169,6 +243,8 @@ def _row_to_product(row) -> Product:
         currency=row["currency"],
         category=row["category"],
         duration_minutes=row["duration_minutes"],
+        reward_count=row["reward_count"] if "reward_count" in row.keys() else None,
+        wheel_id=row["wheel_id"] if "wheel_id" in row.keys() else None,
     )
 
 
@@ -648,10 +724,13 @@ async def get_today_spin(pool: asyncpg.Pool, user_id: int) -> WheelPrize | None:
     """Retourne le lot déjà gagné aujourd'hui par l'utilisateur, ou None s'il peut encore tourner."""
     row = await pool.fetchrow(
         """
-        SELECT wp.id, wp.label, wp.description, wp.kind, wp.discount_percent, wp.points_amount
+        SELECT wp.id, wp.label, wp.description, wp.kind, wp.discount_percent, wp.points_amount,
+               wp.content_pool, wp.call_duration_minutes, wp.weight
         FROM wheel_spins ws
         JOIN wheel_prizes wp ON wp.id = ws.prize_id
-        WHERE ws.user_id = $1 AND ws.spin_date = (now() AT TIME ZONE 'UTC')::date
+        WHERE ws.user_id = $1
+          AND ws.spin_date = (now() AT TIME ZONE 'UTC')::date
+          AND ws.is_daily = TRUE
         """,
         user_id,
     )
@@ -668,6 +747,9 @@ def _row_to_wheel_prize(row) -> WheelPrize:
         kind=row["kind"],
         discount_percent=row["discount_percent"],
         points_amount=row["points_amount"] if "points_amount" in row.keys() else None,
+        content_pool=row["content_pool"] if "content_pool" in row.keys() else None,
+        call_duration_minutes=row["call_duration_minutes"] if "call_duration_minutes" in row.keys() else None,
+        weight=int(row["weight"]) if "weight" in row.keys() and row["weight"] is not None else 1,
     )
 
 
@@ -683,19 +765,24 @@ async def spin_wheel(pool: asyncpg.Pool, user_id: int) -> WheelPrize:
             already = await connection.fetchrow(
                 """
                 SELECT 1 FROM wheel_spins
-                WHERE user_id = $1 AND spin_date = (now() AT TIME ZONE 'UTC')::date
+                WHERE user_id = $1
+                  AND spin_date = (now() AT TIME ZONE 'UTC')::date
+                  AND is_daily = TRUE
                 """,
                 user_id,
             )
             if already is not None:
                 raise CartError("Tu as déjà tourné la roue aujourd'hui, reviens demain !")
 
+            free_id = await connection.fetchval("SELECT id FROM wheels WHERE slug = 'free'")
             prize_rows = await connection.fetch(
                 """
-                SELECT id, label, description, kind, discount_percent, points_amount, weight
+                SELECT id, label, description, kind, discount_percent, points_amount, weight,
+                       content_pool, call_duration_minutes
                 FROM wheel_prizes
-                WHERE is_active = TRUE
-                """
+                WHERE is_active = TRUE AND (wheel_id = $1 OR ($1 IS NULL AND wheel_id IS NULL))
+                """,
+                free_id,
             )
             if not prize_rows:
                 raise CartError("Aucun lot disponible pour le moment.")
@@ -705,11 +792,12 @@ async def spin_wheel(pool: asyncpg.Pool, user_id: int) -> WheelPrize:
 
             await connection.execute(
                 """
-                INSERT INTO wheel_spins (user_id, spin_date, prize_id)
-                VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $2)
+                INSERT INTO wheel_spins (user_id, spin_date, prize_id, wheel_id, is_daily)
+                VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $2, $3, TRUE)
                 """,
                 user_id,
                 chosen["id"],
+                free_id,
             )
 
             if chosen["kind"] == "points" and chosen["points_amount"]:
@@ -777,10 +865,443 @@ async def _add_points(
     return new_balance
 
 
-async def pay_order_with_points(pool: asyncpg.Pool, user_id: int, order_id: int) -> tuple[int, int, str | None]:
+async def list_wheels(pool: asyncpg.Pool) -> list[WheelInfo]:
+    rows = await pool.fetch(
+        """
+        SELECT w.id, w.slug, w.name, w.price_cents, p.id AS product_id
+        FROM wheels w
+        LEFT JOIN products p ON p.wheel_id = w.id AND p.category = 'wheel' AND p.is_active = TRUE
+        WHERE w.is_active = TRUE
+        ORDER BY w.price_cents, w.id
+        """
+    )
+    wheels: list[WheelInfo] = []
+    for row in rows:
+        prizes = await pool.fetch(
+            """
+            SELECT id, label, description, kind, discount_percent, points_amount, weight,
+                   content_pool, call_duration_minutes
+            FROM wheel_prizes
+            WHERE is_active = TRUE AND wheel_id = $1
+            ORDER BY id
+            """,
+            row["id"],
+        )
+        wheels.append(
+            WheelInfo(
+                id=row["id"],
+                slug=row["slug"],
+                name=row["name"],
+                price_cents=row["price_cents"],
+                product_id=row["product_id"],
+                prizes=tuple(_row_to_wheel_prize(prize) for prize in prizes),
+            )
+        )
+    return wheels
+
+
+def _row_to_asset(row) -> RewardAsset:
+    return RewardAsset(
+        id=row["id"],
+        pool=row["pool"],
+        kind=row["kind"],
+        telegram_file_id=row["telegram_file_id"],
+        caption=row["caption"] or "",
+    )
+
+
+async def add_reward_asset(
+    pool: asyncpg.Pool,
+    *,
+    pool_name: str,
+    kind: str,
+    telegram_file_id: str,
+    file_unique_id: str,
+    caption: str = "",
+) -> int:
+    expected = VALID_REWARD_POOLS.get(pool_name)
+    if expected is None:
+        raise CartError("Pool inconnu.")
+    if kind != expected:
+        raise CartError(f"Ce pool attend un fichier {expected}.")
+    try:
+        return await pool.fetchval(
+            """
+            INSERT INTO reward_assets (pool, kind, telegram_file_id, file_unique_id, caption)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+            """,
+            pool_name,
+            kind,
+            telegram_file_id,
+            file_unique_id,
+            caption,
+        )
+    except asyncpg.UniqueViolationError as exc:
+        raise CartError("Ce fichier est déjà dans ce pool.") from exc
+
+
+async def list_reward_stock(pool: asyncpg.Pool) -> list[tuple[str, int, int]]:
+    """(pool, total_actifs, fichiers_jamais_attribués_à_personne) — le 3e sert d'indicateur."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            p.pool,
+            COUNT(a.id)::int AS total,
+            COUNT(a.id) FILTER (
+                WHERE NOT EXISTS (SELECT 1 FROM reward_grants g WHERE g.asset_id = a.id)
+            )::int AS unused_ever
+        FROM unnest($1::text[]) AS p(pool)
+        LEFT JOIN reward_assets a ON a.pool = p.pool AND a.is_active = TRUE
+        GROUP BY p.pool
+        ORDER BY p.pool
+        """,
+        list(VALID_REWARD_POOLS.keys()),
+    )
+    return [(row["pool"], row["total"], row["unused_ever"]) for row in rows]
+
+
+async def list_assets_granted_for_order(pool: asyncpg.Pool, order_id: int) -> list[RewardAsset]:
+    rows = await pool.fetch(
+        """
+        SELECT a.id, a.pool, a.kind, a.telegram_file_id, a.caption
+        FROM reward_grants g
+        JOIN reward_assets a ON a.id = g.asset_id
+        WHERE g.order_id = $1
+        ORDER BY g.id
+        """,
+        order_id,
+    )
+    return [_row_to_asset(row) for row in rows]
+    rows = await pool.fetch(
+        """
+        SELECT g.created_at, g.user_id, a.pool, a.kind, g.source, g.order_id, a.caption
+        FROM reward_grants g
+        JOIN reward_assets a ON a.id = g.asset_id
+        WHERE g.order_id = $1
+        ORDER BY g.id
+        """,
+        order_id,
+    )
+    return [_row_to_grant(row) for row in rows]
+
+
+async def list_grants_for_user(pool: asyncpg.Pool, user_id: int, limit: int = 30) -> list[RewardGrantRow]:
+    rows = await pool.fetch(
+        """
+        SELECT g.created_at, g.user_id, a.pool, a.kind, g.source, g.order_id, a.caption
+        FROM reward_grants g
+        JOIN reward_assets a ON a.id = g.asset_id
+        WHERE g.user_id = $1
+        ORDER BY g.id DESC
+        LIMIT $2
+        """,
+        user_id,
+        limit,
+    )
+    return [_row_to_grant(row) for row in rows]
+
+
+def _row_to_grant(row) -> RewardGrantRow:
+    return RewardGrantRow(
+        created_at=row["created_at"],
+        user_id=row["user_id"],
+        pool=row["pool"],
+        kind=row["kind"],
+        source=row["source"],
+        order_id=row["order_id"],
+        caption=row["caption"] or "",
+    )
+
+
+async def _pick_unused_assets(
+    connection: asyncpg.Connection,
+    user_id: int,
+    pool_name: str,
+    count: int,
+) -> list[RewardAsset]:
+    if count <= 0:
+        return []
+    rows = await connection.fetch(
+        """
+        SELECT a.id, a.pool, a.kind, a.telegram_file_id, a.caption
+        FROM reward_assets a
+        WHERE a.pool = $1 AND a.is_active = TRUE
+          AND NOT EXISTS (
+              SELECT 1 FROM reward_grants g
+              WHERE g.asset_id = a.id AND g.user_id = $2
+          )
+        ORDER BY random()
+        LIMIT $3
+        """,
+        pool_name,
+        user_id,
+        count,
+    )
+    return [_row_to_asset(row) for row in rows]
+
+
+async def _grant_assets(
+    connection: asyncpg.Connection,
+    user_id: int,
+    order_id: int,
+    pool_name: str,
+    count: int,
+    source: str,
+) -> tuple[list[RewardAsset], str | None]:
+    assets = await _pick_unused_assets(connection, user_id, pool_name, count)
+    for asset in assets:
+        await connection.execute(
+            """
+            INSERT INTO reward_grants (user_id, asset_id, order_id, source)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id, asset_id) DO NOTHING
+            """,
+            user_id,
+            asset.id,
+            order_id,
+            source,
+        )
+    warning = None
+    if len(assets) < count:
+        warning = (
+            f"Stock insuffisant : pool {pool_name}, commande #{order_id} "
+            f"({len(assets)}/{count})."
+        )
+    return assets, warning
+
+
+async def _book_prize_call_slot(
+    connection: asyncpg.Connection,
+    order_id: int,
+    duration_minutes: int,
+) -> tuple[CallSlot | None, str | None]:
+    slot = await connection.fetchrow(
+        """
+        SELECT id, start_at, duration_minutes, status
+        FROM call_slots
+        WHERE status = 'available' AND duration_minutes = $1 AND start_at > now()
+        ORDER BY start_at
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+        """,
+        duration_minutes,
+    )
+    if slot is None:
+        return None, (
+            f"Aucun créneau {duration_minutes} min disponible pour la commande #{order_id}. "
+            "Ajoute un /addslot."
+        )
+    await connection.execute(
+        "UPDATE call_slots SET status = 'booked', order_id = $1 WHERE id = $2",
+        order_id,
+        slot["id"],
+    )
+    await connection.execute(
+        """
+        UPDATE order_items SET call_slot_id = $2
+        WHERE id = (
+            SELECT oi.id FROM order_items oi
+            WHERE oi.order_id = $1 AND oi.call_slot_id IS NULL
+            ORDER BY oi.id LIMIT 1
+        )
+        """,
+        order_id,
+        slot["id"],
+    )
+    return (
+        CallSlot(
+            id=slot["id"],
+            start_at=slot["start_at"],
+            duration_minutes=slot["duration_minutes"],
+            status="booked",
+        ),
+        None,
+    )
+
+
+async def _fulfill_paid_wheel(
+    connection: asyncpg.Connection,
+    user_id: int,
+    order_id: int,
+    wheel_id: int,
+    result: FulfillmentResult,
+) -> None:
+    existing = await connection.fetchrow(
+        """
+        SELECT wp.kind, wp.label, wp.points_amount, wp.content_pool, wp.call_duration_minutes
+        FROM wheel_spins ws
+        JOIN wheel_prizes wp ON wp.id = ws.prize_id
+        WHERE ws.order_id = $1
+        """,
+        order_id,
+    )
+
+    if existing is None:
+        prize_rows = await connection.fetch(
+            """
+            SELECT id, label, description, kind, discount_percent, points_amount, weight,
+                   content_pool, call_duration_minutes
+            FROM wheel_prizes
+            WHERE is_active = TRUE AND wheel_id = $1
+            """,
+            wheel_id,
+        )
+        if not prize_rows:
+            result.warnings.append(f"Aucun lot configuré pour la roue (commande #{order_id}).")
+            return
+        chosen = random.choices(prize_rows, weights=[row["weight"] for row in prize_rows], k=1)[0]
+        await connection.execute(
+            """
+            INSERT INTO wheel_spins (user_id, spin_date, prize_id, wheel_id, order_id, is_daily)
+            VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $2, $3, $4, FALSE)
+            """,
+            user_id,
+            chosen["id"],
+            wheel_id,
+            order_id,
+        )
+        if chosen["kind"] == "points" and chosen["points_amount"]:
+            await _add_points(
+                connection,
+                user_id,
+                int(chosen["points_amount"]),
+                reason="wheel",
+                order_id=order_id,
+            )
+            result.points_amount = int(chosen["points_amount"])
+        result.prize_label = chosen["label"]
+        result.prize_kind = chosen["kind"]
+        kind = chosen["kind"]
+        content_pool = chosen["content_pool"]
+        call_duration = chosen["call_duration_minutes"]
+    else:
+        result.prize_label = existing["label"]
+        result.prize_kind = existing["kind"]
+        kind = existing["kind"]
+        content_pool = existing["content_pool"]
+        call_duration = existing["call_duration_minutes"]
+        if kind == "points" and existing["points_amount"]:
+            result.points_amount = int(existing["points_amount"])
+
+    if kind in ("photo", "video") and content_pool:
+        already = await connection.fetchval(
+            "SELECT COUNT(*) FROM reward_grants WHERE order_id = $1 AND source = 'wheel'",
+            order_id,
+        )
+        if int(already or 0) > 0:
+            return
+        assets, warning = await _grant_assets(
+            connection, user_id, order_id, content_pool, 1, "wheel"
+        )
+        result.assets.extend(assets)
+        if warning:
+            result.warnings.append(warning)
+            result.needs_manual_ship = True
+        return
+
+    if kind == "call":
+        existing_slot = await connection.fetchrow(
+            "SELECT id FROM call_slots WHERE order_id = $1",
+            order_id,
+        )
+        if existing_slot is not None:
+            return
+        duration = int(call_duration or 15)
+        slot, warning = await _book_prize_call_slot(connection, order_id, duration)
+        result.call_slot = slot
+        if warning:
+            result.warnings.append(warning)
+
+
+async def fulfill_paid_order(connection: asyncpg.Connection, order_id: int) -> FulfillmentResult:
+    """Tire et attribue les lots d'une commande déjà marquée paid (même transaction)."""
+    result = FulfillmentResult(warnings=[])
+    order = await connection.fetchrow(
+        "SELECT user_id FROM orders WHERE id = $1",
+        order_id,
+    )
+    if order is None:
+        result.warnings.append(f"Commande #{order_id} introuvable.")
+        return result
+    user_id = int(order["user_id"])
+
+    items = await connection.fetch(
+        """
+        SELECT oi.id, p.category, p.reward_count, p.wheel_id, p.price_cents
+        FROM order_items oi
+        JOIN products p ON p.id = oi.product_id
+        WHERE oi.order_id = $1
+        """,
+        order_id,
+    )
+    for item in items:
+        if item["category"] == "wheel" and item["wheel_id"] is not None:
+            await _fulfill_paid_wheel(
+                connection, user_id, order_id, int(item["wheel_id"]), result
+            )
+        elif item["category"] == "photo":
+            count = int(item["reward_count"] or 0)
+            pool_name = _BOOSTER_POOL_BY_COUNT.get(count)
+            if not pool_name or count <= 0:
+                result.needs_manual_ship = True
+                result.warnings.append(
+                    f"Pack photo sans stock automatisé (commande #{order_id})."
+                )
+                continue
+            already = await connection.fetchval(
+                "SELECT COUNT(*) FROM reward_grants WHERE order_id = $1 AND source = 'booster'",
+                order_id,
+            )
+            needed = count - int(already or 0)
+            if needed <= 0:
+                result.shipped_complete = True
+                continue
+            assets, warning = await _grant_assets(
+                connection, user_id, order_id, pool_name, needed, "booster"
+            )
+            result.assets.extend(assets)
+            if warning:
+                result.warnings.append(warning)
+                result.needs_manual_ship = True
+            granted = int(already or 0) + len(assets)
+            if granted >= count:
+                await connection.execute(
+                    """
+                    UPDATE orders SET shipped_at = now()
+                    WHERE id = $1 AND shipped_at IS NULL
+                    """,
+                    order_id,
+                )
+                result.shipped_complete = True
+            else:
+                result.needs_manual_ship = True
+    return result
+
+
+async def fulfill_remaining_for_order(pool: asyncpg.Pool, order_id: int) -> FulfillmentResult:
+    """Relance l'attribution (stock vide au premier essai, ou /fulfill)."""
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            order = await connection.fetchrow(
+                "SELECT status FROM orders WHERE id = $1 FOR UPDATE",
+                order_id,
+            )
+            if order is None:
+                result = FulfillmentResult(warnings=[f"Commande #{order_id} introuvable."])
+                return result
+            if order["status"] != "paid":
+                result = FulfillmentResult(
+                    warnings=[f"Commande #{order_id} n'est pas payée."]
+                )
+                return result
+            return await fulfill_paid_order(connection, order_id)
+
+
+async def pay_order_with_points(pool: asyncpg.Pool, user_id: int, order_id: int) -> tuple[int, int, FulfillmentResult]:
     """Paie une commande pending intégralement en points.
 
-    Retourne (points_spent, new_balance, slot_warning).
+    Retourne (points_spent, new_balance, fulfillment).
     """
     async with pool.acquire() as connection:
         async with connection.transaction():
@@ -821,7 +1342,10 @@ async def pay_order_with_points(pool: asyncpg.Pool, user_id: int, order_id: int)
             if not result.endswith(" 1"):
                 raise CartError("Cette commande n'est plus à payer.")
             slot_warning = await _book_call_slots_for_order(connection, order_id)
-            return needed, new_balance, slot_warning
+            fulfillment = await fulfill_paid_order(connection, order_id)
+            if slot_warning:
+                fulfillment.warnings.append(slot_warning)
+            return needed, new_balance, fulfillment
 
 
 # --------------------------------------------------------------------------
@@ -907,6 +1431,21 @@ async def activate_vip_for_order(pool: asyncpg.Pool, order_id: int) -> VipStatus
 # --------------------------------------------------------------------------
 
 
+async def find_user_id_by_username(pool: asyncpg.Pool, username: str) -> int | None:
+    cleaned = username.lstrip("@").strip()
+    if not cleaned:
+        return None
+    return await pool.fetchval(
+        """
+        SELECT user_id FROM orders
+        WHERE lower(telegram_username) = lower($1)
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        cleaned,
+    )
+
+
 async def get_order(pool: asyncpg.Pool, order_id: int) -> OrderRecord | None:
     row = await pool.fetchrow(
         """
@@ -928,10 +1467,10 @@ async def get_order(pool: asyncpg.Pool, order_id: int) -> OrderRecord | None:
     )
 
 
-async def mark_order_paid(pool: asyncpg.Pool, order_id: int) -> tuple[bool, str | None]:
-    """Marque la commande comme payée et réserve le créneau s'il est encore libre.
+async def mark_order_paid(pool: asyncpg.Pool, order_id: int) -> tuple[bool, FulfillmentResult | None]:
+    """Marque la commande comme payée, réserve le créneau et envoie les lots auto.
 
-    Retourne (ok, avertissement_créneau). False si introuvable ou déjà traitée.
+    Retourne (ok, fulfillment). False si introuvable ou déjà traitée.
     """
     async with pool.acquire() as connection:
         async with connection.transaction():
@@ -942,7 +1481,10 @@ async def mark_order_paid(pool: asyncpg.Pool, order_id: int) -> tuple[bool, str 
             if not result.endswith(" 1"):
                 return False, None
             warning = await _book_call_slots_for_order(connection, order_id)
-            return True, warning
+            fulfillment = await fulfill_paid_order(connection, order_id)
+            if warning:
+                fulfillment.warnings.append(warning)
+            return True, fulfillment
 
 
 def _rows_to_ship_tasks(rows) -> list[ShipTask]:

@@ -15,32 +15,53 @@ from html import escape
 import asyncpg
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from config import config
 from db.repository import (
+    CartError,
+    REWARD_POOL_LABELS,
+    VALID_REWARD_POOLS,
     activate_vip_for_order,
+    add_reward_asset,
     cancel_pending_order,
     create_call_slot,
     customer_hint_suffix,
+    find_user_id_by_username,
+    fulfill_remaining_for_order,
     get_call_slot_for_order,
     get_order,
     get_photo_items_label,
     list_client_folders,
+    list_grants_for_order,
+    list_grants_for_user,
+    list_assets_granted_for_order,
     list_orders_to_ship,
     list_pending_orders,
+    list_reward_stock,
     list_upcoming_call_slots,
     mark_order_paid,
     mark_order_shipped,
     tag_user,
     untag_user,
 )
+from handlers.rewards import admin_fulfillment_lines, deliver_fulfillment
 from keyboards.admin import (
     CALLBACK_PAY_PREFIX,
     CALLBACK_SHIP_PREFIX,
+    CALLBACK_STOCK_MENU,
+    CALLBACK_STOCK_MORE,
+    CALLBACK_STOCK_NO,
+    CALLBACK_STOCK_OK,
+    CALLBACK_STOCK_POOL_PREFIX,
     orders_inbox_keyboard,
     shipped_keyboard,
+    stock_after_add_keyboard,
+    stock_pools_keyboard,
+    stock_preview_keyboard,
 )
 from utils.logger import get_logger
 
@@ -48,11 +69,23 @@ logger = get_logger(__name__)
 
 router = Router(name="admin")
 router.message.filter(F.from_user.id == config.admin_user_id)
+router.callback_query.filter(F.from_user.id == config.admin_user_id)
+
+
+class StockFSM(StatesGroup):
+    waiting_media = State()
+    preview = State()
 
 GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Merci de réessayer plus tard."
 
 ADDSLOT_USAGE = "Usage : /addslot AAAA-MM-JJ HH:MM DURÉE_MIN (heure en UTC)\nEx: /addslot 2026-08-26 18:00 30"
 CONFIRM_USAGE = "Usage : /confirm ID_COMMANDE\nEx: /confirm 42"
+STOCK_USAGE = (
+    "Envoie une photo ou une vidéo avec la légende /stock POOL\n"
+    "ou ouvre le menu : /stock"
+)
+GRANTS_USAGE = "Usage : /grants ID_COMMANDE ou /grants @username"
+FULFILL_USAGE = "Usage : /fulfill ID_COMMANDE\nEx: /fulfill 12"
 CANCEL_USAGE = "Usage : /cancel ID_COMMANDE\nEx: /cancel 42"
 SHIP_USAGE = "Usage : /ship ID_COMMANDE\nEx: /ship 42"
 TAG_USAGE = "Usage : /tag ID_COMMANDE dossier\nEx: /tag 12 proches"
@@ -127,13 +160,12 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
     if order.status != "pending":
         return f"Commande #{order_id} déjà traitée (statut : {order.status}).", False
 
-    marked, slot_warning = await mark_order_paid(db_pool, order_id)
-    if not marked:
+    marked, fulfillment = await mark_order_paid(db_pool, order_id)
+    if not marked or fulfillment is None:
         return f"Commande #{order_id} déjà traitée entre-temps.", False
 
     summary_lines = [f"✅ Commande #{order_id} confirmée."]
-    if slot_warning:
-        summary_lines.append(f"⚠ {slot_warning}")
+    summary_lines.extend(admin_fulfillment_lines(fulfillment))
 
     vip_status = await activate_vip_for_order(db_pool, order_id)
     if vip_status is not None:
@@ -147,8 +179,12 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (VIP activé)", order.user_id)
 
+    send_errors = await deliver_fulfillment(bot, order.user_id, fulfillment)
+    summary_lines.extend(f"⚠ {err}" for err in send_errors)
+
     call_slot = await get_call_slot_for_order(db_pool, order_id)
-    if call_slot is not None:
+    slot_conflict = any("déjà été pris" in w for w in fulfillment.warnings)
+    if call_slot is not None and fulfillment.call_slot is None:
         summary_lines.append(f"→ Appel confirmé pour le {call_slot.start_at:%d/%m/%Y %H:%M} UTC.")
         try:
             await bot.send_message(
@@ -158,7 +194,8 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (appel confirmé)", order.user_id)
 
-    if slot_warning:
+    delivered = bool(fulfillment.assets or fulfillment.points_amount or fulfillment.call_slot)
+    if slot_conflict:
         try:
             await bot.send_message(
                 order.user_id,
@@ -166,14 +203,15 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
             )
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (créneau pris)", order.user_id)
-    elif vip_status is None and call_slot is None:
+    elif vip_status is None and call_slot is None and not delivered:
         try:
             await bot.send_message(order.user_id, f"✅ Ta commande #{order_id} est confirmée, merci !")
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (commande confirmée)", order.user_id)
 
     photo_label = await get_photo_items_label(db_pool, order_id)
-    if photo_label:
+    show_ship = bool(photo_label) and not fulfillment.shipped_complete
+    if show_ship:
         who = _who(order.customer_name, order.telegram_username, order.user_id)
         summary_lines.append(f"→ À envoyer : {photo_label} — {who}")
         return "\n".join(summary_lines), True
@@ -423,6 +461,255 @@ async def handle_folders(message: Message, db_pool: asyncpg.Pool | None) -> None
     for folder in folders:
         lines.append(f"• {escape(folder.name)} ({folder.member_count})")
     await message.answer("\n".join(lines))
+
+
+def _extract_stock_media(message: Message) -> tuple[str, str, str] | None:
+    src = message
+    if not message.photo and not message.video and message.reply_to_message:
+        src = message.reply_to_message
+    if src.photo:
+        shot = src.photo[-1]
+        return "photo", shot.file_id, shot.file_unique_id
+    if src.video:
+        return "video", src.video.file_id, src.video.file_unique_id
+    return None
+
+
+def _pool_title(pool_name: str) -> str:
+    return REWARD_POOL_LABELS.get(pool_name, pool_name)
+
+
+def _expected_kind_label(kind: str) -> str:
+    return "une vidéo" if kind == "video" else "une photo"
+
+
+async def _send_stock_menu(message: Message, db_pool: asyncpg.Pool) -> None:
+    rows = await list_reward_stock(db_pool)
+    counts = {name: total for name, total, _unused in rows}
+    lines = ["Stock — choisis un slot, puis envoie le fichier.\n"]
+    for name, total, unused in rows:
+        lines.append(f"• {_pool_title(name)} — {total} fichier(s), {unused} jamais attribué(s)")
+    await message.answer("\n".join(lines), reply_markup=stock_pools_keyboard(counts))
+
+
+async def _ask_for_stock_file(target: Message, state: FSMContext, pool_name: str) -> None:
+    kind = VALID_REWARD_POOLS[pool_name]
+    await state.set_state(StockFSM.waiting_media)
+    await state.update_data(pool=pool_name, kind=kind)
+    await target.answer(
+        f"Envoie {_expected_kind_label(kind)} pour « {_pool_title(pool_name)} ».\n"
+        "Tu verras un aperçu avant de l'ajouter."
+    )
+
+
+@router.message(Command("stock"))
+async def handle_stock(
+    message: Message, command: CommandObject, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+    pool_name = (command.args or "").split()[0].lower() if command.args else ""
+    if not pool_name:
+        try:
+            await state.clear()
+            await _send_stock_menu(message, db_pool)
+        except Exception:
+            logger.exception("Erreur /stock liste")
+            await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+    if pool_name not in VALID_REWARD_POOLS:
+        await message.answer(STOCK_USAGE)
+        return
+    media = _extract_stock_media(message)
+    if media is None:
+        await _ask_for_stock_file(message, state, pool_name)
+        return
+    kind, file_id, unique_id = media
+    await state.set_state(StockFSM.preview)
+    await state.update_data(pool=pool_name, kind=kind, file_id=file_id, unique_id=unique_id)
+    await _send_stock_preview(message, pool_name, kind, file_id)
+
+
+async def _send_stock_preview(message: Message, pool_name: str, kind: str, file_id: str) -> None:
+    caption = f"Aperçu — {_pool_title(pool_name)}"
+    markup = stock_preview_keyboard()
+    if kind == "video":
+        await message.answer_video(file_id, caption=caption, reply_markup=markup)
+    else:
+        await message.answer_photo(file_id, caption=caption, reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith(CALLBACK_STOCK_POOL_PREFIX))
+async def handle_stock_pool_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    pool_name = (callback.data or "")[len(CALLBACK_STOCK_POOL_PREFIX) :]
+    if pool_name not in VALID_REWARD_POOLS:
+        await callback.answer("Slot inconnu.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message:
+        await _ask_for_stock_file(callback.message, state, pool_name)
+
+
+@router.callback_query(F.data == CALLBACK_STOCK_MENU)
+async def handle_stock_menu(
+    callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
+    await state.clear()
+    await callback.answer()
+    if db_pool is None or callback.message is None:
+        return
+    await _send_stock_menu(callback.message, db_pool)
+
+
+@router.callback_query(F.data == CALLBACK_STOCK_MORE)
+async def handle_stock_more(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    pool_name = data.get("pool")
+    if pool_name not in VALID_REWARD_POOLS:
+        await callback.answer("Choisis d'abord un slot.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message:
+        await _ask_for_stock_file(callback.message, state, pool_name)
+
+
+@router.message(StateFilter(StockFSM.waiting_media), F.photo | F.video)
+async def handle_stock_media(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    pool_name = data.get("pool")
+    expected = data.get("kind")
+    media = _extract_stock_media(message)
+    if pool_name not in VALID_REWARD_POOLS or media is None:
+        await message.answer("Envoie une photo ou une vidéo.")
+        return
+    kind, file_id, unique_id = media
+    if kind != expected:
+        await message.answer(
+            f"Ce slot attend {_expected_kind_label(str(expected))}. Envoie le bon type de fichier."
+        )
+        return
+    await state.set_state(StockFSM.preview)
+    await state.update_data(file_id=file_id, unique_id=unique_id, kind=kind)
+    await _send_stock_preview(message, pool_name, kind, file_id)
+
+
+@router.callback_query(StateFilter(StockFSM.preview), F.data == CALLBACK_STOCK_OK)
+async def handle_stock_confirm(
+    callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await callback.answer("Base indisponible.", show_alert=True)
+        return
+    data = await state.get_data()
+    pool_name = data.get("pool")
+    kind = data.get("kind")
+    file_id = data.get("file_id")
+    unique_id = data.get("unique_id")
+    if pool_name not in VALID_REWARD_POOLS or not file_id or not unique_id or not kind:
+        await callback.answer("Aperçu expiré. Renvoie le fichier.", show_alert=True)
+        await state.clear()
+        return
+    try:
+        asset_id = await add_reward_asset(
+            db_pool,
+            pool_name=pool_name,
+            kind=kind,
+            telegram_file_id=file_id,
+            file_unique_id=unique_id,
+        )
+    except CartError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    except Exception:
+        logger.exception("Erreur ajout stock %s", pool_name)
+        await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
+        return
+    await state.set_state(StockFSM.waiting_media)
+    await state.update_data(file_id=None, unique_id=None)
+    await callback.answer("Ajouté")
+    if callback.message:
+        await callback.message.answer(
+            f"✅ #{asset_id} ajouté dans « {_pool_title(pool_name)} ».",
+            reply_markup=stock_after_add_keyboard(),
+        )
+
+
+@router.callback_query(F.data == CALLBACK_STOCK_NO)
+async def handle_stock_cancel_preview(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    pool_name = data.get("pool")
+    await callback.answer("Annulé")
+    if pool_name in VALID_REWARD_POOLS and callback.message:
+        await _ask_for_stock_file(callback.message, state, pool_name)
+    else:
+        await state.clear()
+
+
+@router.message(Command("grants"))
+async def handle_grants(message: Message, command: CommandObject, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+    raw = (command.args or "").strip()
+    if not raw:
+        await message.answer(GRANTS_USAGE)
+        return
+    try:
+        if raw.startswith("@") or (raw and not raw.isdigit()):
+            user_id = await find_user_id_by_username(db_pool, raw)
+            if user_id is None:
+                await message.answer("Aucun client avec ce @.")
+                return
+            rows = await list_grants_for_user(db_pool, user_id)
+            header = f"Lots de {raw} :"
+        else:
+            order_id = int(raw)
+            rows = await list_grants_for_order(db_pool, order_id)
+            header = f"Lots de la commande #{order_id} :"
+    except Exception:
+        logger.exception("Erreur /grants")
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+    if not rows:
+        await message.answer("Aucun lot enregistré.")
+        return
+    lines = [header, ""]
+    for row in rows:
+        when = row.created_at.strftime("%d/%m %H:%M")
+        ref = f" #{row.order_id}" if row.order_id else ""
+        lines.append(f"• {when} — {row.pool} ({row.kind}, {row.source}){ref}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("fulfill"))
+async def handle_fulfill(
+    message: Message, command: CommandObject, bot: Bot, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+    args = (command.args or "").split()
+    if len(args) != 1 or not args[0].isdigit():
+        await message.answer(FULFILL_USAGE)
+        return
+    order_id = int(args[0])
+    try:
+        order = await get_order(db_pool, order_id)
+        if order is None:
+            await message.answer(f"Commande #{order_id} introuvable.")
+            return
+        fulfillment = await fulfill_remaining_for_order(db_pool, order_id)
+        if not fulfillment.assets:
+            fulfillment.assets = await list_assets_granted_for_order(db_pool, order_id)
+        send_errors = await deliver_fulfillment(bot, order.user_id, fulfillment)
+        lines = [f"Relance #{order_id}."]
+        lines.extend(admin_fulfillment_lines(fulfillment))
+        lines.extend(f"⚠ {err}" for err in send_errors)
+        await message.answer("\n".join(lines))
+    except Exception:
+        logger.exception("Erreur /fulfill #%s", order_id)
+        await message.answer(GENERIC_ERROR_MESSAGE)
 
 
 async def _respond_admin_callback(

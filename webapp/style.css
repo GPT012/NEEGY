@@ -785,6 +785,42 @@ html[data-theme="dark"] .slot-booked-label small {
 
 /* --------------------------------------------------- Roue quotidienne */
 
+.wheel-switch {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 0 0 18px;
+}
+
+.wheel-switch-btn {
+  flex: 1;
+  max-width: 110px;
+  padding: 10px 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--hint);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.wheel-switch-btn strong {
+  display: block;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.wheel-switch-btn.active {
+  border-color: var(--gold-border);
+  background: var(--gold-soft);
+  color: var(--gold-deep);
+}
+
 .wheel-stage {
   display: grid;
   place-items: center;
