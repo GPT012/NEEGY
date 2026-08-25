@@ -49,12 +49,11 @@ _SEED_VIP_PLAN = (
     30,
 )
 
-# label, description, kind ('manual' ou 'discount'), discount_percent, weight
+# label, description, kind, discount_percent, weight, points_amount
 _SEED_WHEEL_PRIZES = [
-    ("Photo surprise", "Une photo gratuite choisie par mes soins, envoyée dans la journée.", "manual", None, 3),
-    ("Message vocal", "Un petit message vocal personnalisé, juste pour toi.", "manual", None, 2),
-    ("-10% sur ta prochaine commande", "Réduction appliquée automatiquement au prochain checkout.", "discount", 10, 3),
-    ("-15% sur ta prochaine commande", "Réduction appliquée automatiquement au prochain checkout.", "discount", 15, 1),
+    ("+2 points", "Ajoutés à ton solde. 1 point = 1 € de boutique.", "points", None, 5, 2),
+    ("+4 points", "Ajoutés à ton solde. 1 point = 1 € de boutique.", "points", None, 4, 4),
+    ("+9 points", "Ajoutés à ton solde. 1 point = 1 € de boutique.", "points", None, 1, 9),
 ]
 
 
@@ -230,21 +229,42 @@ async def _seed_vip_category(connection: asyncpg.Connection) -> None:
 
 
 async def _seed_wheel_prizes(pool: asyncpg.Pool) -> None:
-    """Ajoute les lots de démonstration de la roue si la table est vide."""
+    """Active les lots en points et retire les anciens lots manuels/réductions."""
     async with pool.acquire() as connection:
-        count = await connection.fetchval("SELECT COUNT(*) FROM wheel_prizes")
-        if count:
-            return
-        for label, description, kind, discount_percent, weight in _SEED_WHEEL_PRIZES:
+        async with connection.transaction():
             await connection.execute(
-                """
-                INSERT INTO wheel_prizes (label, description, kind, discount_percent, weight)
-                VALUES ($1, $2, $3, $4, $5)
-                """,
-                label,
-                description,
-                kind,
-                discount_percent,
-                weight,
+                "UPDATE wheel_prizes SET is_active = FALSE WHERE kind <> 'points'"
             )
-        logger.info("Lots de la roue initialisés (%d)", len(_SEED_WHEEL_PRIZES))
+            for label, description, kind, discount_percent, weight, points_amount in _SEED_WHEEL_PRIZES:
+                existing = await connection.fetchval(
+                    "SELECT id FROM wheel_prizes WHERE kind = 'points' AND points_amount = $1",
+                    points_amount,
+                )
+                if existing:
+                    await connection.execute(
+                        """
+                        UPDATE wheel_prizes
+                        SET label = $1, description = $2, weight = $3, is_active = TRUE,
+                            discount_percent = NULL
+                        WHERE id = $4
+                        """,
+                        label,
+                        description,
+                        weight,
+                        existing,
+                    )
+                else:
+                    await connection.execute(
+                        """
+                        INSERT INTO wheel_prizes
+                            (label, description, kind, discount_percent, weight, points_amount)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                        label,
+                        description,
+                        kind,
+                        discount_percent,
+                        weight,
+                        points_amount,
+                    )
+        logger.info("Lots de la roue (points) synchronisés")

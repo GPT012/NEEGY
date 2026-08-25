@@ -17,6 +17,7 @@ import asyncpg
 
 from api.telegram_auth import InvalidInitData, validate_init_data
 from db.repository import (
+    activate_vip_for_order,
     CartError,
     CartItem,
     Product,
@@ -26,12 +27,18 @@ from db.repository import (
     customer_note_lines,
     get_cart,
     get_customer_snapshot,
+    get_order,
+    get_photo_items_label,
     get_today_spin,
     get_vip_status,
+    get_call_slot_for_order,
+    get_points_balance,
     list_active_vip_plans,
     list_available_call_slots,
     list_products,
     remove_cart_item,
+    pay_order_with_points,
+    points_needed_for_cents,
     spin_wheel,
     upsert_cart_item,
 )
@@ -118,6 +125,7 @@ def _serialize_wheel_prize(prize: WheelPrize) -> dict:
         "description": prize.description,
         "kind": prize.kind,
         "discount_percent": prize.discount_percent,
+        "points_amount": prize.points_amount,
     }
 
 
@@ -232,8 +240,14 @@ async def get_wheel_status(request: web.Request) -> web.Response:
     pool = _get_pool(request)
     try:
         prize = await get_today_spin(pool, user_id)
+        balance = await get_points_balance(pool, user_id)
         return web.json_response(
-            {"can_spin": prize is None, "prize": _serialize_wheel_prize(prize) if prize else None}
+            {
+                "can_spin": prize is None,
+                "prize": _serialize_wheel_prize(prize) if prize else None,
+                "points_balance": balance,
+                "points_rate": "1 point = 1 €",
+            }
         )
     except Exception:
         logger.exception("Erreur lors de la lecture du statut de la roue pour user_id=%s", user_id)
@@ -249,6 +263,7 @@ async def post_wheel_spin(request: web.Request) -> web.Response:
 
     try:
         prize = await spin_wheel(pool, user_id)
+        balance = await get_points_balance(pool, user_id)
     except CartError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except Exception:
@@ -265,7 +280,7 @@ async def post_wheel_spin(request: web.Request) -> web.Response:
         except Exception:
             logger.exception("Impossible de notifier l'admin du gain à la roue (user_id=%s)", user_id)
 
-    return web.json_response(_serialize_wheel_prize(prize))
+    return web.json_response({**_serialize_wheel_prize(prize), "points_balance": balance})
 
 
 @routes.get("/api/vip/status")
@@ -422,5 +437,78 @@ async def checkout(request: web.Request) -> web.Response:
             "discount_percent": result.discount_percent,
             "currency": result.currency,
             "payment": payment,
+            "points_balance": await get_points_balance(pool, user_id),
+            "points_needed": points_needed_for_cents(result.total_cents),
+        }
+    )
+
+
+@routes.post("/api/orders/{order_id}/pay-points")
+async def pay_with_points(request: web.Request) -> web.Response:
+    user = _authenticated_user(request)
+    user_id = int(user["id"])
+    pool = _get_pool(request)
+    bot: Bot = request.app["bot"]
+    admin_user_id = request.app.get("admin_user_id")
+
+    try:
+        order_id = int(request.match_info["order_id"])
+    except ValueError:
+        return web.json_response({"error": "Commande invalide"}, status=400)
+
+    try:
+        points_spent, balance = await pay_order_with_points(pool, user_id, order_id)
+    except CartError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception:
+        logger.exception("Erreur paiement points commande #%s user_id=%s", request.match_info.get("order_id"), user_id)
+        return web.json_response(GENERIC_ERROR_BODY, status=500)
+
+    order = await get_order(pool, order_id)
+    try:
+        vip_status = await activate_vip_for_order(pool, order_id)
+        if vip_status is not None:
+            await bot.send_message(
+                user_id,
+                f"🎉 Ton abonnement VIP « {vip_status.plan_name} » est activé jusqu'au "
+                f"{vip_status.expires_at:%d/%m/%Y} !",
+            )
+        call_slot = await get_call_slot_for_order(pool, order_id)
+        if call_slot is not None:
+            await bot.send_message(
+                user_id,
+                f"📞 Ton appel du {call_slot.start_at:%d/%m/%Y à %H:%M} UTC est confirmé !",
+            )
+        if vip_status is None and call_slot is None:
+            await bot.send_message(
+                user_id,
+                f"✅ Commande #{order_id} payée avec {points_spent} points. Merci !",
+            )
+    except Exception:
+        logger.exception("Impossible de notifier le client user_id=%s après paiement points", user_id)
+
+    if admin_user_id and order is not None:
+        who = _who_label(order.customer_name, order.telegram_username, user_id)
+        extra = ""
+        try:
+            photo_label = await get_photo_items_label(pool, order_id)
+            if photo_label:
+                extra = f"\nÀ envoyer : {photo_label} — {who}"
+        except Exception:
+            logger.exception("Impossible de lire les photos de la commande #%s", order_id)
+        try:
+            await bot.send_message(
+                admin_user_id,
+                f"✅ #{order_id} payée en points ({points_spent} pts) — {who}{extra}",
+            )
+        except Exception:
+            logger.exception("Impossible de notifier l'admin du paiement points #%s", order_id)
+
+    return web.json_response(
+        {
+            "order_id": order_id,
+            "paid_with_points": True,
+            "points_spent": points_spent,
+            "points_balance": balance,
         }
     )

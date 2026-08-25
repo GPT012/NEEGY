@@ -145,3 +145,30 @@ CREATE TABLE IF NOT EXISTS client_folder_members (
 
 CREATE INDEX IF NOT EXISTS idx_client_folder_members_user_id
     ON client_folder_members (user_id);
+
+-- Points de la roue : 1 point = 1 €, utilisables en boutique.
+ALTER TABLE wheel_prizes DROP CONSTRAINT IF EXISTS wheel_prizes_kind_check;
+ALTER TABLE wheel_prizes ADD CONSTRAINT wheel_prizes_kind_check
+    CHECK (kind IN ('manual', 'discount', 'points'));
+ALTER TABLE wheel_prizes ADD COLUMN IF NOT EXISTS points_amount INTEGER NULL
+    CHECK (points_amount IS NULL OR points_amount > 0);
+
+CREATE TABLE IF NOT EXISTS user_points (
+    user_id    BIGINT PRIMARY KEY,
+    balance    INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS point_ledger (
+    id         SERIAL PRIMARY KEY,
+    user_id    BIGINT NOT NULL,
+    delta      INTEGER NOT NULL,
+    reason     TEXT NOT NULL,
+    order_id   INTEGER NULL REFERENCES orders(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_point_ledger_user_id ON point_ledger (user_id);
+
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS points_spent INTEGER NULL
+    CHECK (points_spent IS NULL OR points_spent > 0);

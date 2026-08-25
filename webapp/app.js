@@ -18,6 +18,9 @@
   const payIbanCopyEl = document.getElementById("pay-iban-copy");
   const payRefEl = document.getElementById("pay-ref");
   const payDoneEl = document.getElementById("pay-done");
+  const payPointsEl = document.getElementById("pay-points");
+  const payPointsHintEl = document.getElementById("pay-points-hint");
+  const pointsBalanceEl = document.getElementById("points-balance");
   const cartStripEl = document.getElementById("cart-strip");
   const shopBadgeEl = document.getElementById("shop-badge");
   const wheelStatusEl = document.getElementById("wheel-status-text");
@@ -33,7 +36,7 @@
   };
   const pageMeta = {
     shop: { title: "Le deck", subtitle: "Choisis ton booster. Chaque pack a sa rareté." },
-    wheel: { title: "Le rituel", subtitle: "Un geste chaque jour. Un cadeau, parfois." },
+    wheel: { title: "La roue", subtitle: "1 point = 1 €. 10 points paient un pack 10 €." },
     vip: { title: "Le cercle", subtitle: "L'accès discret, sans ostentation." },
   };
   const BOOSTER_TIERS = [
@@ -62,6 +65,7 @@
   const openSlotPickers = new Set();
   let wheelRotation = 0;
   let toastTimer = null;
+  let lastPayOrder = null;
 
   // ------------------------------------------------------------------
   // Utilitaires
@@ -523,10 +527,35 @@
     }
   }
 
+  function setPointsBalance(balance) {
+    if (!pointsBalanceEl) return;
+    const n = Number(balance) || 0;
+    pointsBalanceEl.textContent = `${n} pt${n === 1 ? "" : "s"}`;
+  }
+
   function openPaymentSheet(result) {
     const payment = result.payment || {};
+    lastPayOrder = result;
     payHeadingEl.textContent = `Commande #${result.order_id}`;
     payTotalEl.textContent = formatPrice(result.total_cents, result.currency);
+
+    const needed = Number(result.points_needed) || 0;
+    const balance = Number(result.points_balance) || 0;
+    if (payPointsHintEl) {
+      if (needed <= 0) {
+        payPointsHintEl.hidden = true;
+      } else if (balance >= needed) {
+        payPointsHintEl.hidden = false;
+        payPointsHintEl.textContent = `Tu as ${balance} points. Ce panier coûte ${needed} pts (1 pt = 1 €).`;
+      } else {
+        payPointsHintEl.hidden = false;
+        payPointsHintEl.textContent = `${balance} / ${needed} points — continue avec PayPal ou un virement.`;
+      }
+    }
+    if (payPointsEl) {
+      payPointsEl.hidden = !(needed > 0 && balance >= needed);
+      payPointsEl.textContent = `Payer avec ${needed} points`;
+    }
 
     if (payment.paypal_url) {
       payPaypalEl.hidden = false;
@@ -579,13 +608,14 @@
     wheelSpinBtn.disabled = true;
     try {
       const status = await apiFetch("/api/wheel/status");
+      setPointsBalance(status.points_balance);
       if (status.can_spin) {
-        wheelStatusEl.innerHTML = "Ton invitation du jour t'attend.";
+        wheelStatusEl.innerHTML = "Tourne pour gagner 2, 4 ou 9 points.";
         wheelSpinBtn.disabled = false;
         wheelSpinBtn.textContent = "Tourner la roue";
       } else {
-        const label = status.prize ? escapeHtml(status.prize.label) : "un lot";
-        wheelStatusEl.innerHTML = `Déjà honorée aujourd'hui — <span class="wheel-prize">${label}</span>. Reviens demain.`;
+        const label = status.prize ? escapeHtml(status.prize.label) : "des points";
+        wheelStatusEl.innerHTML = `Déjà tournée aujourd'hui — <span class="wheel-prize">${label}</span>. Reviens demain.`;
         wheelSpinBtn.textContent = "Reviens demain";
       }
     } catch (err) {
@@ -622,11 +652,14 @@
     await new Promise((resolve) => setTimeout(resolve, remaining));
 
     tg?.HapticFeedback?.notificationOccurred?.("success");
-    const message = `${prize.label}\n\n${prize.description}`;
+    if (typeof prize.points_balance === "number") setPointsBalance(prize.points_balance);
+    const message = prize.points_amount
+      ? `+${prize.points_amount} points\n\n${prize.description}`
+      : `${prize.label}\n\n${prize.description}`;
     if (tg?.showPopup) {
-      tg.showPopup({ title: "🎉 Gagné !", message, buttons: [{ type: "close" }] });
+      tg.showPopup({ title: "Gagné", message, buttons: [{ type: "close" }] });
     } else {
-      showToast(`${prize.label} — ${prize.description}`, "success");
+      showToast(prize.label, "success");
     }
     await refreshWheelStatus();
   });
@@ -757,6 +790,31 @@
       const copied = await copyText(iban);
       showToast(copied ? "IBAN copié" : "Impossible de copier", copied ? "success" : undefined);
       tg?.HapticFeedback?.impactOccurred?.("light");
+    });
+
+    payPointsEl?.addEventListener("click", async () => {
+      if (!lastPayOrder?.order_id) return;
+      payPointsEl.disabled = true;
+      try {
+        const paid = await apiFetch(`/api/orders/${lastPayOrder.order_id}/pay-points`, {
+          method: "POST",
+        });
+        setPointsBalance(paid.points_balance);
+        payPaypalEl.hidden = true;
+        payBankEl.hidden = true;
+        payPointsEl.hidden = true;
+        if (payPointsHintEl) {
+          payPointsHintEl.hidden = false;
+          payPointsHintEl.textContent = `Payé avec ${paid.points_spent} points. Solde : ${paid.points_balance} pts.`;
+        }
+        payTotalEl.textContent = "Réglé en points";
+        showToast("Commande payée avec tes points", "success");
+        tg?.HapticFeedback?.notificationOccurred?.("success");
+      } catch (err) {
+        showToast(err.message);
+      } finally {
+        payPointsEl.disabled = false;
+      }
     });
 
     payDoneEl.addEventListener("click", () => {

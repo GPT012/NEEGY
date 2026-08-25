@@ -53,7 +53,9 @@
         </div>
       </div>
       <div class="wheel-panel">
-        <p class="wheel-kicker">Invitation du jour</p>
+        <p class="wheel-kicker">Points</p>
+        <p id="points-balance" class="points-balance">—</p>
+        <p class="wheel-odds">2 pts (×5) · 4 pts (×4) · 9 pts (×1)</p>
         <p id="wheel-status-text" class="wheel-status">Chargement…</p>
         <button id="wheel-spin-btn" class="btn btn-gold btn-lg" disabled>Tourner la roue</button>
       </div>
@@ -71,7 +73,9 @@
       <p class="pay-kicker">Paiement</p>
       <h2 id="pay-heading">Commande</h2>
       <p id="pay-total" class="pay-total"></p>
-      <p class="pay-hint">PayPal ou virement. Indique le libellé pour qu’on retrouve ta commande.</p>
+      <p id="pay-points-hint" class="pay-hint"></p>
+      <button type="button" id="pay-points" class="btn btn-gold btn-block" hidden>Payer avec mes points</button>
+      <p class="pay-hint">Sinon PayPal ou virement. Indique le libellé pour qu’on retrouve ta commande.</p>
       <a id="pay-paypal" class="btn btn-gold btn-block" hidden target="_blank" rel="noopener noreferrer">Payer avec PayPal</a>
       <div id="pay-bank" class="pay-bank" hidden>
         <p class="pay-bank-label">Virement</p>

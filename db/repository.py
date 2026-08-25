@@ -70,6 +70,7 @@ class WheelPrize:
     description: str
     kind: str
     discount_percent: int | None
+    points_amount: int | None = None
 
 
 @dataclass(frozen=True)
@@ -462,7 +463,7 @@ async def get_today_spin(pool: asyncpg.Pool, user_id: int) -> WheelPrize | None:
     """Retourne le lot déjà gagné aujourd'hui par l'utilisateur, ou None s'il peut encore tourner."""
     row = await pool.fetchrow(
         """
-        SELECT wp.id, wp.label, wp.description, wp.kind, wp.discount_percent
+        SELECT wp.id, wp.label, wp.description, wp.kind, wp.discount_percent, wp.points_amount
         FROM wheel_spins ws
         JOIN wheel_prizes wp ON wp.id = ws.prize_id
         WHERE ws.user_id = $1 AND ws.spin_date = (now() AT TIME ZONE 'UTC')::date
@@ -481,6 +482,7 @@ def _row_to_wheel_prize(row) -> WheelPrize:
         description=row["description"],
         kind=row["kind"],
         discount_percent=row["discount_percent"],
+        points_amount=row["points_amount"] if "points_amount" in row.keys() else None,
     )
 
 
@@ -505,7 +507,7 @@ async def spin_wheel(pool: asyncpg.Pool, user_id: int) -> WheelPrize:
 
             prize_rows = await connection.fetch(
                 """
-                SELECT id, label, description, kind, discount_percent, weight
+                SELECT id, label, description, kind, discount_percent, points_amount, weight
                 FROM wheel_prizes
                 WHERE is_active = TRUE
                 """
@@ -525,7 +527,112 @@ async def spin_wheel(pool: asyncpg.Pool, user_id: int) -> WheelPrize:
                 chosen["id"],
             )
 
+            if chosen["kind"] == "points" and chosen["points_amount"]:
+                await _add_points(
+                    connection,
+                    user_id,
+                    int(chosen["points_amount"]),
+                    reason="wheel",
+                )
+
             return _row_to_wheel_prize(chosen)
+
+
+def points_needed_for_cents(total_cents: int) -> int:
+    """1 point = 1 €, arrondi au euro supérieur (29,90 € → 30 points)."""
+    if total_cents <= 0:
+        return 0
+    return (total_cents + 99) // 100
+
+
+async def get_points_balance(pool: asyncpg.Pool, user_id: int) -> int:
+    value = await pool.fetchval("SELECT balance FROM user_points WHERE user_id = $1", user_id)
+    return int(value or 0)
+
+
+async def _add_points(
+    connection: asyncpg.Connection,
+    user_id: int,
+    delta: int,
+    *,
+    reason: str,
+    order_id: int | None = None,
+) -> int:
+    row = await connection.fetchrow(
+        "SELECT balance FROM user_points WHERE user_id = $1 FOR UPDATE",
+        user_id,
+    )
+    current = int(row["balance"]) if row is not None else 0
+    new_balance = current + delta
+    if new_balance < 0:
+        raise CartError("Solde de points insuffisant.")
+
+    if row is None:
+        await connection.execute(
+            "INSERT INTO user_points (user_id, balance, updated_at) VALUES ($1, $2, now())",
+            user_id,
+            new_balance,
+        )
+    else:
+        await connection.execute(
+            "UPDATE user_points SET balance = $2, updated_at = now() WHERE user_id = $1",
+            user_id,
+            new_balance,
+        )
+    await connection.execute(
+        """
+        INSERT INTO point_ledger (user_id, delta, reason, order_id)
+        VALUES ($1, $2, $3, $4)
+        """,
+        user_id,
+        delta,
+        reason,
+        order_id,
+    )
+    return new_balance
+
+
+async def pay_order_with_points(pool: asyncpg.Pool, user_id: int, order_id: int) -> tuple[int, int]:
+    """Paie une commande pending intégralement en points. Retourne (points_spent, new_balance)."""
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            order = await connection.fetchrow(
+                """
+                SELECT id, user_id, total_cents, status
+                FROM orders WHERE id = $1 FOR UPDATE
+                """,
+                order_id,
+            )
+            if order is None:
+                raise CartError("Commande introuvable.")
+            if int(order["user_id"]) != user_id:
+                raise CartError("Commande introuvable.")
+            if order["status"] != "pending":
+                raise CartError("Cette commande n'est plus à payer.")
+
+            needed = points_needed_for_cents(int(order["total_cents"]))
+            if needed <= 0:
+                raise CartError("Rien à payer en points.")
+
+            new_balance = await _add_points(
+                connection,
+                user_id,
+                -needed,
+                reason="order",
+                order_id=order_id,
+            )
+            result = await connection.execute(
+                """
+                UPDATE orders
+                SET status = 'paid', points_spent = $2
+                WHERE id = $1 AND status = 'pending'
+                """,
+                order_id,
+                needed,
+            )
+            if not result.endswith(" 1"):
+                raise CartError("Cette commande n'est plus à payer.")
+            return needed, new_balance
 
 
 # --------------------------------------------------------------------------
