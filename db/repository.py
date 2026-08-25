@@ -973,6 +973,9 @@ async def list_assets_granted_for_order(pool: asyncpg.Pool, order_id: int) -> li
         order_id,
     )
     return [_row_to_asset(row) for row in rows]
+
+
+async def list_grants_for_order(pool: asyncpg.Pool, order_id: int) -> list[RewardGrantRow]:
     rows = await pool.fetch(
         """
         SELECT g.created_at, g.user_id, a.pool, a.kind, g.source, g.order_id, a.caption
