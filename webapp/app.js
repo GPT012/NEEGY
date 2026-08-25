@@ -90,6 +90,8 @@
   let cartByProduct = new Map();
   let cartTotalCents = 0;
   let cartCurrency = "EUR";
+  /** @type {object|null} */
+  let pendingOrder = null;
   /** @type {Map<number, Array<{id:number,start_at:string,duration_minutes:number}>>} */
   const slotCache = new Map();
   /** @type {Set<number>} product_id dont le sélecteur de créneau est ouvert */
@@ -197,10 +199,19 @@
   function updateCartChrome() {
     const count = cartItemCount();
     if (shopBadgeEl) {
-      shopBadgeEl.hidden = count === 0;
-      shopBadgeEl.textContent = String(count);
+      const badgeCount = pendingOrder ? 1 : count;
+      shopBadgeEl.hidden = badgeCount === 0;
+      shopBadgeEl.textContent = String(badgeCount);
     }
     if (!cartStripEl) return;
+    if (pendingOrder) {
+      cartStripEl.hidden = false;
+      cartStripEl.innerHTML = `
+        <span>Commande <strong>#${pendingOrder.order_id}</strong> en attente</span>
+        <span class="cart-strip-meta">${formatPrice(pendingOrder.total_cents, pendingOrder.currency)}</span>
+      `;
+      return;
+    }
     if (count === 0 || views.shop.hidden) {
       cartStripEl.hidden = true;
       return;
@@ -273,7 +284,15 @@
       ])
     );
     cartTotalCents = cart.total_cents;
-    cartCurrency = cart.items[0]?.currency || cartCurrency;
+    cartCurrency = cart.items[0]?.currency || cart.pending_order?.currency || cartCurrency;
+    pendingOrder = cart.pending_order || null;
+  }
+
+  function shopIsLocked() {
+    if (!pendingOrder) return false;
+    showToast(`La commande #${pendingOrder.order_id} attend encore le règlement.`);
+    openPaymentSheet(pendingOrder);
+    return true;
   }
 
   function renderShop() {
@@ -331,44 +350,24 @@
     price.className = "booster-price";
     price.textContent = formatPrice(product.price_cents, product.currency);
 
+    const actionBtn = document.createElement("button");
     if (quantity > 0) {
-      const control = document.createElement("div");
-      control.className = "qty-control";
-
-      const minusBtn = document.createElement("button");
-      minusBtn.className = "qty-btn";
-      minusBtn.setAttribute("aria-label", "Retirer un exemplaire");
-      minusBtn.textContent = "−";
-      minusBtn.addEventListener("click", (event) => {
+      actionBtn.className = "btn btn-ghost booster-add";
+      actionBtn.textContent = "Retirer";
+      actionBtn.addEventListener("click", (event) => {
         event.stopPropagation();
-        changeQuantity(product.id, quantity - 1);
+        removeCartItem(product.id);
       });
-
-      const value = document.createElement("span");
-      value.className = "qty-value";
-      value.textContent = String(quantity);
-
-      const plusBtn = document.createElement("button");
-      plusBtn.className = "qty-btn";
-      plusBtn.setAttribute("aria-label", "Ajouter un exemplaire");
-      plusBtn.textContent = "+";
-      plusBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        changeQuantity(product.id, quantity + 1);
-      });
-
-      control.append(minusBtn, value, plusBtn);
-      foot.append(price, control);
     } else {
-      const addBtn = document.createElement("button");
-      addBtn.className = "btn btn-gold booster-add";
-      addBtn.textContent = "Ouvrir";
-      addBtn.addEventListener("click", (event) => {
+      actionBtn.className = "btn btn-gold booster-add";
+      actionBtn.textContent = "Ouvrir";
+      actionBtn.addEventListener("click", (event) => {
         event.stopPropagation();
+        if (shopIsLocked()) return;
         changeQuantity(product.id, 1);
       });
-      foot.append(price, addBtn);
     }
+    foot.append(price, actionBtn);
 
     return pack;
   }
@@ -423,7 +422,7 @@
       booked.className = "slot-booked";
       booked.innerHTML = `
         <span class="slot-booked-label">
-          <small>Créneau réservé</small>
+          <small>Créneau choisi</small>
           ${escapeHtml(formatDateTime(entry.call_slot_start_at))}
         </span>
       `;
@@ -440,7 +439,10 @@
     const chooseBtn = document.createElement("button");
     chooseBtn.className = isOpen ? "btn btn-ghost booster-add" : "btn btn-gold booster-add";
     chooseBtn.textContent = isOpen ? "Masquer" : "Réserver";
-    chooseBtn.addEventListener("click", () => toggleSlotPicker(product));
+    chooseBtn.addEventListener("click", () => {
+      if (!isOpen && shopIsLocked()) return;
+      toggleSlotPicker(product);
+    });
     foot.appendChild(chooseBtn);
 
     if (isOpen) {
@@ -489,6 +491,7 @@
   }
 
   async function bookSlot(product, slot) {
+    if (shopIsLocked()) return;
     try {
       const cart = await apiFetch("/api/cart", {
         method: "POST",
@@ -499,7 +502,7 @@
       slotCache.delete(product.id);
       renderShop();
       tg?.HapticFeedback?.notificationOccurred?.("success");
-      showToast(`Créneau retenu : ${formatDateTime(slot.start_at)}`, "success");
+      showToast(`Créneau choisi : ${formatDateTime(slot.start_at)}`, "success");
     } catch (err) {
       showToast(err.message);
     }
@@ -532,7 +535,18 @@
 
   function updateMainButton() {
     if (!tg) return;
-    if (views.shop.hidden || cartTotalCents <= 0) {
+    if (views.shop.hidden) {
+      tg.MainButton.hide();
+      return;
+    }
+    if (pendingOrder) {
+      tg.MainButton.setText(
+        `Régler · ${formatPrice(pendingOrder.total_cents, pendingOrder.currency)}`
+      );
+      tg.MainButton.show();
+      return;
+    }
+    if (cartTotalCents <= 0) {
       tg.MainButton.hide();
       return;
     }
@@ -622,11 +636,16 @@
   }
 
   async function handleCheckout() {
+    if (pendingOrder) {
+      openPaymentSheet(pendingOrder);
+      return;
+    }
     tg?.MainButton?.showProgress?.(true);
     try {
       const result = await apiFetch("/api/checkout", { method: "POST" });
       cartByProduct = new Map();
       cartTotalCents = 0;
+      pendingOrder = result;
       renderShop();
       tg?.HapticFeedback?.notificationOccurred?.("success");
       openPaymentSheet(result);
@@ -776,6 +795,7 @@
         button.className = "btn btn-gold btn-block";
         button.textContent = "Demander l'accès";
         button.addEventListener("click", async () => {
+          if (shopIsLocked()) return;
           await changeQuantity(product.id, 1);
           await refreshVipStatus();
           showToast("Ajouté au panier — valide depuis l'onglet Boutique.", "success");
@@ -887,8 +907,15 @@
           payPointsHintEl.textContent = `Payé avec ${paid.points_spent} points. Solde : ${paid.points_balance} pts.`;
         }
         payTotalEl.textContent = "Réglé en points";
+        pendingOrder = null;
         showToast("Commande payée avec tes points", "success");
         tg?.HapticFeedback?.notificationOccurred?.("success");
+        try {
+          await fetchCatalog();
+          renderShop();
+        } catch (err) {
+          renderShop();
+        }
       } catch (err) {
         showToast(err.message);
       } finally {

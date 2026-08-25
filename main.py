@@ -51,6 +51,7 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="folders", description="Liste des dossiers"),
     BotCommand(command="ship", description="Marquer envoyé"),
     BotCommand(command="confirm", description="Paiement reçu"),
+    BotCommand(command="cancel", description="Annuler une commande pending"),
     BotCommand(command="slots", description="Créneaux d'appel"),
     BotCommand(command="addslot", description="Ajouter un créneau"),
     *BOT_COMMANDS,

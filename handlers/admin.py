@@ -21,6 +21,7 @@ from aiogram.types import CallbackQuery, Message
 from config import config
 from db.repository import (
     activate_vip_for_order,
+    cancel_pending_order,
     create_call_slot,
     customer_hint_suffix,
     get_call_slot_for_order,
@@ -52,6 +53,7 @@ GENERIC_ERROR_MESSAGE = "Une erreur est survenue. Merci de réessayer plus tard.
 
 ADDSLOT_USAGE = "Usage : /addslot AAAA-MM-JJ HH:MM DURÉE_MIN (heure en UTC)\nEx: /addslot 2026-08-26 18:00 30"
 CONFIRM_USAGE = "Usage : /confirm ID_COMMANDE\nEx: /confirm 42"
+CANCEL_USAGE = "Usage : /cancel ID_COMMANDE\nEx: /cancel 42"
 SHIP_USAGE = "Usage : /ship ID_COMMANDE\nEx: /ship 42"
 TAG_USAGE = "Usage : /tag ID_COMMANDE dossier\nEx: /tag 12 proches"
 UNTAG_USAGE = "Usage : /untag ID_COMMANDE dossier\nEx: /untag 12 proches"
@@ -125,11 +127,13 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
     if order.status != "pending":
         return f"Commande #{order_id} déjà traitée (statut : {order.status}).", False
 
-    marked = await mark_order_paid(db_pool, order_id)
+    marked, slot_warning = await mark_order_paid(db_pool, order_id)
     if not marked:
         return f"Commande #{order_id} déjà traitée entre-temps.", False
 
     summary_lines = [f"✅ Commande #{order_id} confirmée."]
+    if slot_warning:
+        summary_lines.append(f"⚠ {slot_warning}")
 
     vip_status = await activate_vip_for_order(db_pool, order_id)
     if vip_status is not None:
@@ -154,7 +158,15 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (appel confirmé)", order.user_id)
 
-    if vip_status is None and call_slot is None:
+    if slot_warning:
+        try:
+            await bot.send_message(
+                order.user_id,
+                "✅ Paiement reçu. Le créneau n'était plus libre : on te propose un autre horaire.",
+            )
+        except Exception:
+            logger.exception("Impossible de notifier le client user_id=%s (créneau pris)", order.user_id)
+    elif vip_status is None and call_slot is None:
         try:
             await bot.send_message(order.user_id, f"✅ Ta commande #{order_id} est confirmée, merci !")
         except Exception:
@@ -249,6 +261,45 @@ async def handle_confirm(
         )
     except Exception:
         logger.exception("Erreur lors de la confirmation de la commande #%s", order_id)
+        await message.answer(GENERIC_ERROR_MESSAGE)
+
+
+@router.message(Command("cancel"))
+async def handle_cancel(
+    message: Message, command: CommandObject, bot: Bot, db_pool: asyncpg.Pool | None
+) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible pour le moment.")
+        return
+
+    args = (command.args or "").split()
+    if len(args) != 1 or not args[0].isdigit():
+        await message.answer(CANCEL_USAGE)
+        return
+    order_id = int(args[0])
+
+    try:
+        order = await get_order(db_pool, order_id)
+        if order is None:
+            await message.answer(f"Commande #{order_id} introuvable.")
+            return
+        if order.status != "pending":
+            await message.answer(f"Commande #{order_id} n'est pas en attente (statut : {order.status}).")
+            return
+        cancelled = await cancel_pending_order(db_pool, order_id)
+        if not cancelled:
+            await message.answer(f"Commande #{order_id} n'est plus en attente.")
+            return
+        try:
+            await bot.send_message(
+                order.user_id,
+                f"Ta commande #{order_id} n'est plus en attente. Tu peux en passer une autre.",
+            )
+        except Exception:
+            logger.exception("Impossible de notifier le client user_id=%s (commande annulée)", order.user_id)
+        await message.answer(f"🗑 Commande #{order_id} annulée. Le client peut recommander.")
+    except Exception:
+        logger.exception("Erreur lors de l'annulation de la commande #%s", order_id)
         await message.answer(GENERIC_ERROR_MESSAGE)
 
 

@@ -28,6 +28,7 @@ from db.repository import (
     get_cart,
     get_customer_snapshot,
     get_order,
+    get_pending_order,
     get_photo_items_label,
     get_today_spin,
     get_vip_status,
@@ -116,7 +117,30 @@ def _serialize_cart(items: list[CartItem]) -> dict:
             for item in items
         ],
         "total_cents": sum(item.subtotal_cents for item in items),
+        "pending_order": None,
     }
+
+
+async def _cart_payload(request: web.Request, user_id: int) -> dict:
+    pool = _get_pool(request)
+    pending = await get_pending_order(pool, user_id)
+    items = await get_cart(pool, user_id)
+    body = _serialize_cart(items)
+    if pending is None:
+        return body
+    payment = _payment_payload(request)
+    payment["reference"] = f"NEEGY-{pending.order_id}"
+    body["pending_order"] = {
+        "order_id": pending.order_id,
+        "total_cents": pending.total_cents,
+        "original_total_cents": pending.original_total_cents,
+        "discount_percent": pending.discount_percent,
+        "currency": pending.currency,
+        "payment": payment,
+        "points_balance": await get_points_balance(pool, user_id),
+        "points_needed": points_needed_for_cents(pending.total_cents),
+    }
+    return body
 
 
 def _serialize_wheel_prize(prize: WheelPrize) -> dict:
@@ -179,10 +203,8 @@ async def get_call_slots(request: web.Request) -> web.Response:
 @routes.get("/api/cart")
 async def get_user_cart(request: web.Request) -> web.Response:
     user_id = _authenticate(request)
-    pool = _get_pool(request)
     try:
-        items = await get_cart(pool, user_id)
-        return web.json_response(_serialize_cart(items))
+        return web.json_response(await _cart_payload(request, user_id))
     except Exception:
         logger.exception("Erreur lors de la récupération du panier pour user_id=%s", user_id)
         return web.json_response(GENERIC_ERROR_BODY, status=500)
@@ -206,8 +228,9 @@ async def update_cart_item(request: web.Request) -> web.Response:
 
     try:
         await upsert_cart_item(pool, user_id, product_id, quantity, call_slot_id=call_slot_id)
-        items = await get_cart(pool, user_id)
-        return web.json_response(_serialize_cart(items))
+        return web.json_response(await _cart_payload(request, user_id))
+    except CartError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
     except asyncpg.ForeignKeyViolationError:
         return web.json_response({"error": "Produit ou créneau introuvable"}, status=404)
     except Exception:
@@ -227,8 +250,7 @@ async def delete_cart_item(request: web.Request) -> web.Response:
 
     try:
         await remove_cart_item(pool, user_id, product_id)
-        items = await get_cart(pool, user_id)
-        return web.json_response(_serialize_cart(items))
+        return web.json_response(await _cart_payload(request, user_id))
     except Exception:
         logger.exception("Erreur lors de la suppression d'un article pour user_id=%s", user_id)
         return web.json_response(GENERIC_ERROR_BODY, status=500)
@@ -471,7 +493,7 @@ async def pay_with_points(request: web.Request) -> web.Response:
         return web.json_response({"error": "Commande invalide"}, status=400)
 
     try:
-        points_spent, balance = await pay_order_with_points(pool, user_id, order_id)
+        points_spent, balance, slot_warning = await pay_order_with_points(pool, user_id, order_id)
     except CartError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except Exception:
@@ -510,6 +532,8 @@ async def pay_with_points(request: web.Request) -> web.Response:
                 extra = f"\nÀ envoyer : {photo_label} — {who}"
         except Exception:
             logger.exception("Impossible de lire les photos de la commande #%s", order_id)
+        if slot_warning:
+            extra += f"\n⚠ {slot_warning}"
         try:
             await bot.send_message(
                 admin_user_id,

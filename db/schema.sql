@@ -172,3 +172,11 @@ CREATE INDEX IF NOT EXISTS idx_point_ledger_user_id ON point_ledger (user_id);
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS points_spent INTEGER NULL
     CHECK (points_spent IS NULL OR points_spent > 0);
+
+-- Le créneau choisi est mémorisé sur la commande ; il n'est marqué booked
+-- qu'au paiement effectif (évite qu'un checkout impayé bloque l'agenda).
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS call_slot_id INTEGER NULL
+    REFERENCES call_slots(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_orders_user_pending
+    ON orders (user_id) WHERE status = 'pending';

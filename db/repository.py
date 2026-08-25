@@ -17,6 +17,11 @@ class CartError(RuntimeError):
     """Erreur métier liée au panier (ex: panier vide, créneau plus disponible)."""
 
 
+# Une commande pending non réglée expire pour ne pas bloquer le client (et
+# libérer un éventuel créneau déjà retenu par l'ancien flux checkout).
+PENDING_ORDER_TTL_HOURS = 24
+
+
 @dataclass(frozen=True)
 class Product:
     id: int
@@ -271,26 +276,59 @@ async def upsert_cart_item(
 ) -> None:
     """Définit la quantité (et le créneau éventuel) d'un produit dans le panier.
 
-    Supprime l'article si quantity <= 0. Pour un appel, call_slot_id doit être
-    fourni : la disponibilité réelle n'est vérifiée qu'au checkout (transaction
-    atomique), ceci ne fait que refléter le choix du client dans le panier.
+    Un seul article à la fois, quantité 1. Un client avec une commande encore
+    pending ne peut rien ajouter. Pour un appel, le créneau n'est pas bloqué
+    ici : il reste visible tant que le paiement n'est pas confirmé.
     """
     if quantity <= 0:
         await remove_cart_item(pool, user_id, product_id)
         return
+    if quantity > 1:
+        raise CartError("Un seul exemplaire à la fois.")
 
-    await pool.execute(
-        """
-        INSERT INTO cart_items (user_id, product_id, quantity, call_slot_id, updated_at)
-        VALUES ($1, $2, $3, $4, now())
-        ON CONFLICT (user_id, product_id)
-        DO UPDATE SET quantity = EXCLUDED.quantity, call_slot_id = EXCLUDED.call_slot_id, updated_at = now()
-        """,
-        user_id,
-        product_id,
-        quantity,
-        call_slot_id,
-    )
+    await expire_stale_pending_orders(pool)
+
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            pending_id = await connection.fetchval(
+                """
+                SELECT id FROM orders
+                WHERE user_id = $1 AND status = 'pending'
+                LIMIT 1
+                """,
+                user_id,
+            )
+            if pending_id is not None:
+                raise CartError(
+                    "Ta commande précédente attend encore le règlement. "
+                    "Une fois confirmée, tu pourras en passer une autre."
+                )
+
+            other = await connection.fetchval(
+                """
+                SELECT product_id FROM cart_items
+                WHERE user_id = $1 AND product_id <> $2
+                LIMIT 1
+                """,
+                user_id,
+                product_id,
+            )
+            if other is not None:
+                raise CartError("Un seul article à la fois. Retire l'autre d'abord.")
+
+            await connection.execute(
+                """
+                INSERT INTO cart_items (user_id, product_id, quantity, call_slot_id, updated_at)
+                VALUES ($1, $2, $3, $4, now())
+                ON CONFLICT (user_id, product_id)
+                DO UPDATE SET quantity = EXCLUDED.quantity,
+                    call_slot_id = EXCLUDED.call_slot_id, updated_at = now()
+                """,
+                user_id,
+                product_id,
+                quantity,
+                call_slot_id,
+            )
 
 
 async def remove_cart_item(pool: asyncpg.Pool, user_id: int, product_id: int) -> None:
@@ -315,12 +353,29 @@ async def create_order_from_cart(
 ) -> OrderResult:
     """Transforme le panier courant en commande, puis vide le panier.
 
-    Opération atomique : soit tout réussit (commande + articles créés, créneaux
-    d'appel réservés, abonnement VIP mis en attente, panier vidé), soit rien
-    n'est modifié en cas d'erreur (créneau pris entre-temps, panier vide...).
+    Opération atomique : soit tout réussit (commande + articles créés,
+    abonnement VIP mis en attente, panier vidé), soit rien n'est modifié.
+    Les créneaux d'appel sont seulement mémorisés : ils restent disponibles
+    jusqu'au paiement, pour qu'un checkout impayé ne bloque pas l'agenda.
     """
+    await expire_stale_pending_orders(pool)
+
     async with pool.acquire() as connection:
         async with connection.transaction():
+            pending_id = await connection.fetchval(
+                """
+                SELECT id FROM orders
+                WHERE user_id = $1 AND status = 'pending'
+                LIMIT 1
+                """,
+                user_id,
+            )
+            if pending_id is not None:
+                raise CartError(
+                    "Ta commande précédente attend encore le règlement. "
+                    "Une fois confirmée, tu pourras en passer une autre."
+                )
+
             rows = await connection.fetch(
                 """
                 SELECT
@@ -337,9 +392,13 @@ async def create_order_from_cart(
             )
             if not rows:
                 raise CartError("Le panier est vide.")
+            if len(rows) > 1:
+                raise CartError("Un seul article à la fois.")
 
             items: list[CartItem] = []
             for row in rows:
+                if row["quantity"] > 1:
+                    raise CartError("Un seul exemplaire à la fois.")
                 category = row["category"]
 
                 if category == "call":
@@ -390,22 +449,17 @@ async def create_order_from_cart(
                 await connection.execute(
                     """
                     INSERT INTO order_items
-                        (order_id, product_id, product_name, unit_price_cents, quantity)
-                    VALUES ($1, $2, $3, $4, $5)
+                        (order_id, product_id, product_name, unit_price_cents,
+                         quantity, call_slot_id)
+                    VALUES ($1, $2, $3, $4, $5, $6)
                     """,
                     order_id,
                     item.product_id,
                     item.name,
                     item.price_cents,
                     item.quantity,
+                    item.call_slot_id,
                 )
-
-                if item.category == "call" and item.call_slot_id is not None:
-                    await connection.execute(
-                        "UPDATE call_slots SET status = 'booked', order_id = $1 WHERE id = $2",
-                        order_id,
-                        item.call_slot_id,
-                    )
 
                 if item.category == "vip" and row["vip_plan_id"] is not None:
                     await connection.execute(
@@ -428,6 +482,137 @@ async def create_order_from_cart(
                 currency=currency,
                 items=items,
             )
+
+
+async def get_pending_order(pool: asyncpg.Pool, user_id: int) -> OrderResult | None:
+    """Commande encore à régler, s'il y en a une. Expire d'abord les trop vieilles."""
+    await expire_stale_pending_orders(pool)
+    row = await pool.fetchrow(
+        """
+        SELECT id, total_cents, currency, discount_percent
+        FROM orders
+        WHERE user_id = $1 AND status = 'pending'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if row is None:
+        return None
+
+    item_rows = await pool.fetch(
+        """
+        SELECT
+            oi.product_id, oi.product_name AS name, oi.unit_price_cents AS price_cents,
+            $2::text AS currency, oi.quantity, p.category, p.duration_minutes,
+            oi.call_slot_id, s.start_at AS call_slot_start_at
+        FROM order_items oi
+        JOIN products p ON p.id = oi.product_id
+        LEFT JOIN call_slots s ON s.id = oi.call_slot_id
+        WHERE oi.order_id = $1
+        ORDER BY oi.id
+        """,
+        row["id"],
+        row["currency"],
+    )
+    items = [_row_to_cart_item(item) for item in item_rows]
+    original_total_cents = sum(item.subtotal_cents for item in items)
+    return OrderResult(
+        order_id=row["id"],
+        total_cents=row["total_cents"],
+        original_total_cents=original_total_cents,
+        discount_percent=row["discount_percent"],
+        currency=row["currency"],
+        items=items,
+    )
+
+
+async def expire_stale_pending_orders(pool: asyncpg.Pool) -> None:
+    """Annule les commandes pending trop anciennes et libère leurs créneaux."""
+    stale_ids = await pool.fetch(
+        """
+        SELECT id FROM orders
+        WHERE status = 'pending'
+          AND created_at < now() - make_interval(hours => $1)
+        """,
+        PENDING_ORDER_TTL_HOURS,
+    )
+    for stale in stale_ids:
+        await cancel_pending_order(pool, stale["id"])
+
+
+async def cancel_pending_order(pool: asyncpg.Pool, order_id: int) -> bool:
+    """Annule une commande pending : libère créneau et VIP en attente."""
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            result = await connection.execute(
+                "UPDATE orders SET status = 'cancelled' WHERE id = $1 AND status = 'pending'",
+                order_id,
+            )
+            if not result.endswith(" 1"):
+                return False
+            await connection.execute(
+                """
+                UPDATE call_slots
+                SET status = 'available', order_id = NULL
+                WHERE order_id = $1 AND status = 'booked'
+                """,
+                order_id,
+            )
+            await connection.execute(
+                """
+                UPDATE vip_subscriptions
+                SET status = 'cancelled'
+                WHERE order_id = $1 AND status = 'pending'
+                """,
+                order_id,
+            )
+            return True
+
+
+async def _book_call_slots_for_order(connection: asyncpg.Connection, order_id: int) -> str | None:
+    """Passe les créneaux mémorisés en booked. None si ok ou pas d'appel.
+
+    Si le créneau a déjà été pris par un autre paiement, le paiement de cette
+    commande reste valable : on renvoie un message pour que l'admin replanifie.
+    """
+    slot_ids = [
+        row["call_slot_id"]
+        for row in await connection.fetch(
+            """
+            SELECT call_slot_id FROM order_items
+            WHERE order_id = $1 AND call_slot_id IS NOT NULL
+            """,
+            order_id,
+        )
+    ]
+    if not slot_ids:
+        return None
+
+    for slot_id in slot_ids:
+        slot = await connection.fetchrow(
+            """
+            SELECT id, status, order_id, start_at
+            FROM call_slots WHERE id = $1 FOR UPDATE
+            """,
+            slot_id,
+        )
+        if slot is None:
+            return "Le créneau n'existe plus. Paiement OK — replanifie l'appel."
+        if slot["status"] == "booked" and slot["order_id"] == order_id:
+            continue
+        if slot["status"] != "available":
+            when = slot["start_at"].strftime("%d/%m/%Y %H:%M")
+            return (
+                f"Le créneau du {when} UTC a déjà été pris. "
+                "Paiement OK — replanifie l'appel."
+            )
+        await connection.execute(
+            "UPDATE call_slots SET status = 'booked', order_id = $1 WHERE id = $2",
+            order_id,
+            slot_id,
+        )
+    return None
 
 
 async def _consume_pending_discount(connection: asyncpg.Connection, user_id: int) -> int | None:
@@ -592,8 +777,11 @@ async def _add_points(
     return new_balance
 
 
-async def pay_order_with_points(pool: asyncpg.Pool, user_id: int, order_id: int) -> tuple[int, int]:
-    """Paie une commande pending intégralement en points. Retourne (points_spent, new_balance)."""
+async def pay_order_with_points(pool: asyncpg.Pool, user_id: int, order_id: int) -> tuple[int, int, str | None]:
+    """Paie une commande pending intégralement en points.
+
+    Retourne (points_spent, new_balance, slot_warning).
+    """
     async with pool.acquire() as connection:
         async with connection.transaction():
             order = await connection.fetchrow(
@@ -632,7 +820,8 @@ async def pay_order_with_points(pool: asyncpg.Pool, user_id: int, order_id: int)
             )
             if not result.endswith(" 1"):
                 raise CartError("Cette commande n'est plus à payer.")
-            return needed, new_balance
+            slot_warning = await _book_call_slots_for_order(connection, order_id)
+            return needed, new_balance, slot_warning
 
 
 # --------------------------------------------------------------------------
@@ -739,13 +928,21 @@ async def get_order(pool: asyncpg.Pool, order_id: int) -> OrderRecord | None:
     )
 
 
-async def mark_order_paid(pool: asyncpg.Pool, order_id: int) -> bool:
-    """Marque la commande comme payée. Retourne False si introuvable ou déjà traitée."""
-    result = await pool.execute(
-        "UPDATE orders SET status = 'paid' WHERE id = $1 AND status = 'pending'",
-        order_id,
-    )
-    return result.endswith(" 1")
+async def mark_order_paid(pool: asyncpg.Pool, order_id: int) -> tuple[bool, str | None]:
+    """Marque la commande comme payée et réserve le créneau s'il est encore libre.
+
+    Retourne (ok, avertissement_créneau). False si introuvable ou déjà traitée.
+    """
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            result = await connection.execute(
+                "UPDATE orders SET status = 'paid' WHERE id = $1 AND status = 'pending'",
+                order_id,
+            )
+            if not result.endswith(" 1"):
+                return False, None
+            warning = await _book_call_slots_for_order(connection, order_id)
+            return True, warning
 
 
 def _rows_to_ship_tasks(rows) -> list[ShipTask]:
