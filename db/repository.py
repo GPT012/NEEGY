@@ -1039,6 +1039,71 @@ async def add_reward_asset(
         raise CartError("Ce fichier est déjà dans ce pool.") from exc
 
 
+async def add_reward_assets_bulk(
+    pool: asyncpg.Pool,
+    *,
+    pool_name: str,
+    items: list[tuple[str, str, str]],
+) -> tuple[int, int]:
+    """Insère plusieurs assets. items = (kind, file_id, unique_id).
+
+    Retourne (ajoutés, doublons_ignorés).
+    """
+    expected = VALID_REWARD_POOLS.get(pool_name)
+    if expected is None:
+        raise CartError("Pool inconnu.")
+    added = 0
+    skipped = 0
+    async with pool.acquire() as connection:
+        for kind, telegram_file_id, file_unique_id in items:
+            if kind != expected:
+                skipped += 1
+                continue
+            try:
+                await connection.execute(
+                    """
+                    INSERT INTO reward_assets (pool, kind, telegram_file_id, file_unique_id)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    pool_name,
+                    kind,
+                    telegram_file_id,
+                    file_unique_id,
+                )
+                added += 1
+            except asyncpg.UniqueViolationError:
+                skipped += 1
+    return added, skipped
+
+
+async def mark_grants_delivered(pool: asyncpg.Pool, order_id: int, asset_ids: list[int]) -> None:
+    if not asset_ids:
+        return
+    await pool.execute(
+        """
+        UPDATE reward_grants
+        SET delivered_at = now()
+        WHERE order_id = $1 AND asset_id = ANY($2::int[]) AND delivered_at IS NULL
+        """,
+        order_id,
+        asset_ids,
+    )
+
+
+async def list_undelivered_assets_for_order(pool: asyncpg.Pool, order_id: int) -> list[RewardAsset]:
+    rows = await pool.fetch(
+        """
+        SELECT a.id, a.pool, a.kind, a.telegram_file_id, a.caption
+        FROM reward_grants g
+        JOIN reward_assets a ON a.id = g.asset_id
+        WHERE g.order_id = $1 AND g.delivered_at IS NULL
+        ORDER BY g.id
+        """,
+        order_id,
+    )
+    return [_row_to_asset(row) for row in rows]
+
+
 async def list_reward_stock(pool: asyncpg.Pool) -> list[tuple[str, int, int]]:
     """(pool, total_actifs, fichiers_jamais_attribués_à_personne) — le 3e sert d'indicateur."""
     rows = await pool.fetch(

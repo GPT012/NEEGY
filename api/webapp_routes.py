@@ -538,7 +538,9 @@ async def pay_with_points(request: web.Request) -> web.Response:
 
     order = await get_order(pool, order_id)
     try:
-        await deliver_fulfillment(bot, user_id, fulfillment)
+        await deliver_fulfillment(
+            bot, user_id, fulfillment, order_id=order_id, db_pool=pool
+        )
         call_slot = await get_call_slot_for_order(pool, order_id)
         if call_slot is not None and fulfillment.call_slot is None:
             await bot.send_message(

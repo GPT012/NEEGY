@@ -4,6 +4,9 @@ Implémentation volontairement basique (adaptée à un seul process) : un
 dictionnaire user_id -> timestamp de la dernière requête acceptée. Toute
 requête arrivant avant l'expiration de la fenêtre est silencieusement
 ignorée (pas d'exception, pas de spam de réponses "trop de requêtes").
+
+L'admin n'est pas limité : les albums Telegram (stock en volume) arrivent
+en rafale et seraient sinon tronqués.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
 
+from config import config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,12 +38,18 @@ class ThrottlingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-        from aiogram.types import InlineQuery
+        from aiogram.types import InlineQuery, Message
 
         if isinstance(event, InlineQuery):
             return await handler(event, data)
 
+        # Albums : plusieurs messages en <1s — ne pas jeter.
+        if isinstance(event, Message) and event.media_group_id:
+            return await handler(event, data)
+
         user_id = self._extract_user_id(event)
+        if user_id is not None and config.admin_user_id and user_id == config.admin_user_id:
+            return await handler(event, data)
 
         if user_id is not None:
             now = time.monotonic()

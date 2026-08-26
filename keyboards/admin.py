@@ -13,6 +13,7 @@ CALLBACK_STOCK_OK = "adm:stk:ok"
 CALLBACK_STOCK_NO = "adm:stk:no"
 CALLBACK_STOCK_MORE = "adm:stk:more"
 CALLBACK_STOCK_MENU = "adm:stk:menu"
+CALLBACK_STOCK_RAPID = "adm:stk:rapid"
 CALLBACK_PREVIEW_PREFIX = "adm:prv:p:"
 CALLBACK_PREVIEW_OK = "adm:prv:ok"
 CALLBACK_PREVIEW_NO = "adm:prv:no"
@@ -79,8 +80,12 @@ def stock_pools_keyboard(counts: dict[str, int] | None = None) -> InlineKeyboard
     return settings_keyboard(stock_counts=counts)
 
 
-def stock_waiting_keyboard() -> InlineKeyboardMarkup:
+def stock_waiting_keyboard(*, rapid: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(
+        text=("⚡ Mode rapide ON" if rapid else "⚡ Mode rapide OFF"),
+        callback_data=CALLBACK_STOCK_RAPID,
+    )
     builder.button(text="⬅️ Paramètres", callback_data=CALLBACK_STOCK_MENU)
     builder.button(text="⬅️ Retour au menu", callback_data=CALLBACK_BACK)
     builder.adjust(1)

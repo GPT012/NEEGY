@@ -9,6 +9,7 @@ ADMIN_USER_ID n'est pas configuré, aucune commande admin ne se déclenche.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from html import escape
 
@@ -26,6 +27,7 @@ from db.repository import (
     REWARD_POOL_LABELS,
     VALID_REWARD_POOLS,
     add_reward_asset,
+    add_reward_assets_bulk,
     cancel_pending_order,
     clear_product_preview,
     create_call_slot,
@@ -43,6 +45,7 @@ from db.repository import (
     list_orders_to_ship,
     list_pending_orders,
     list_reward_stock,
+    list_undelivered_assets_for_order,
     list_upcoming_call_slots,
     mark_order_paid,
     mark_order_shipped,
@@ -63,6 +66,7 @@ from keyboards.admin import (
     CALLBACK_STOCK_NO,
     CALLBACK_STOCK_OK,
     CALLBACK_STOCK_POOL_PREFIX,
+    CALLBACK_STOCK_RAPID,
     orders_inbox_keyboard,
     product_preview_confirm_keyboard,
     product_preview_waiting_keyboard,
@@ -80,6 +84,11 @@ logger = get_logger(__name__)
 router = Router(name="admin")
 router.message.filter(F.from_user.id == config.admin_user_id)
 router.callback_query.filter(F.from_user.id == config.admin_user_id)
+
+# Albums Telegram : plusieurs messages partagent media_group_id ; on agrège puis on flush.
+_album_buffers: dict[str, list[tuple[str, str, str]]] = {}
+_album_tasks: dict[str, asyncio.Task] = {}
+_ALBUM_FLUSH_DELAY = 1.2
 
 
 class StockFSM(StatesGroup):
@@ -179,7 +188,9 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
     summary_lines = [f"✅ Commande #{order_id} confirmée."]
     summary_lines.extend(admin_fulfillment_lines(fulfillment))
 
-    send_errors = await deliver_fulfillment(bot, order.user_id, fulfillment)
+    send_errors = await deliver_fulfillment(
+        bot, order.user_id, fulfillment, order_id=order_id, db_pool=db_pool
+    )
     summary_lines.extend(f"⚠ {err}" for err in send_errors)
 
     call_slot = await get_call_slot_for_order(db_pool, order_id)
@@ -507,7 +518,8 @@ async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
         "Stock (files partagées) :\n"
         "• File photos → packs Photo + lot photo Rose\n"
         "• File vidéos → packs Vidéo + lots vidéo Rose / Nuit\n"
-        "Chaque fichier n'est donné qu'à une seule cliente.\n",
+        "Chaque fichier n'est donné qu'à une seule cliente.\n"
+        "Astuce stock : album Telegram ou mode rapide (sans preview).\n",
         "Previews boutique : 1 média par tarif, visible au clic.\n",
     ]
     for name, total, unused in rows:
@@ -536,13 +548,21 @@ async def _ask_for_stock_file(
     target: Message, state: FSMContext, pool_name: str, *, edit: bool = False
 ) -> None:
     kind = VALID_REWARD_POOLS[pool_name]
+    data = await state.get_data()
+    rapid = bool(data.get("rapid"))
     await state.set_state(StockFSM.waiting_media)
     await state.update_data(mode="stock", pool=pool_name, kind=kind, product_id=None)
+    mode_line = (
+        "⚡ Mode rapide : albums et fichiers ajoutés sans preview unitaire.\n"
+        if rapid
+        else "Tu peux envoyer un album (plusieurs photos/vidéos d'un coup).\n"
+        "Ou active le mode rapide pour sauter la preview.\n"
+    )
     text = (
         f"Envoie {_expected_kind_label(kind)} pour « {_pool_title(pool_name)} ».\n"
-        "Tu verras un aperçu avant de l'ajouter."
+        f"{mode_line}"
     )
-    markup = stock_waiting_keyboard()
+    markup = stock_waiting_keyboard(rapid=rapid)
     if edit:
         try:
             await target.edit_text(text, reply_markup=markup)
@@ -550,6 +570,79 @@ async def _ask_for_stock_file(
         except TelegramBadRequest:
             pass
     await target.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data == CALLBACK_STOCK_RAPID)
+async def handle_stock_rapid_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    rapid = not bool(data.get("rapid"))
+    await state.update_data(rapid=rapid)
+    pool_name = data.get("pool")
+    await callback.answer("Mode rapide ON" if rapid else "Mode rapide OFF")
+    if pool_name in VALID_REWARD_POOLS and callback.message:
+        await _ask_for_stock_file(callback.message, state, pool_name, edit=True)
+
+
+async def _flush_album_stock(
+    *,
+    album_key: str,
+    message: Message,
+    state: FSMContext,
+    db_pool: asyncpg.Pool,
+) -> None:
+    await asyncio.sleep(_ALBUM_FLUSH_DELAY)
+    items = _album_buffers.pop(album_key, [])
+    _album_tasks.pop(album_key, None)
+    data = await state.get_data()
+    pool_name = data.get("pool")
+    if not items or pool_name not in VALID_REWARD_POOLS:
+        return
+    try:
+        added, skipped = await add_reward_assets_bulk(
+            db_pool, pool_name=pool_name, items=items
+        )
+    except Exception:
+        logger.exception("Erreur album stock %s", pool_name)
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+    await state.set_state(StockFSM.waiting_media)
+    await message.answer(
+        f"✅ Album : {added} ajouté(s) dans « {_pool_title(pool_name)} »"
+        + (f", {skipped} doublon(s) ignoré(s)." if skipped else "."),
+        reply_markup=stock_after_add_keyboard(),
+    )
+
+
+async def _add_stock_item_now(
+    message: Message,
+    state: FSMContext,
+    db_pool: asyncpg.Pool,
+    pool_name: str,
+    kind: str,
+    file_id: str,
+    unique_id: str,
+) -> None:
+    try:
+        asset_id = await add_reward_asset(
+            db_pool,
+            pool_name=pool_name,
+            kind=kind,
+            telegram_file_id=file_id,
+            file_unique_id=unique_id,
+        )
+    except CartError as exc:
+        await message.answer(str(exc))
+        return
+    except Exception:
+        logger.exception("Erreur ajout stock rapide %s", pool_name)
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+    await state.set_state(StockFSM.waiting_media)
+    await state.update_data(file_id=None, unique_id=None)
+    await message.answer(
+        f"✅ #{asset_id} ajouté dans « {_pool_title(pool_name)} ».",
+        reply_markup=stock_after_add_keyboard(),
+    )
 
 
 async def _ask_for_product_preview(
@@ -666,10 +759,13 @@ async def handle_stock_more(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(StateFilter(StockFSM.waiting_media), F.photo | F.video | F.video_note | F.document)
-async def handle_stock_media(message: Message, state: FSMContext) -> None:
+async def handle_stock_media(
+    message: Message, state: FSMContext, db_pool: asyncpg.Pool | None
+) -> None:
     data = await state.get_data()
     pool_name = data.get("pool")
     expected = data.get("kind")
+    rapid = bool(data.get("rapid"))
     media = _extract_stock_media(message)
     if pool_name not in VALID_REWARD_POOLS or media is None:
         await message.answer("Envoie une photo ou une vidéo (fichier vidéo accepté aussi).")
@@ -680,6 +776,27 @@ async def handle_stock_media(message: Message, state: FSMContext) -> None:
             f"Ce slot attend {_expected_kind_label(str(expected))}. Envoie le bon type de fichier."
         )
         return
+
+    # Album Telegram → ajout en masse après regroupement.
+    if message.media_group_id and db_pool is not None:
+        album_key = f"{message.chat.id}:{message.media_group_id}"
+        _album_buffers.setdefault(album_key, []).append((kind, file_id, unique_id))
+        old = _album_tasks.get(album_key)
+        if old and not old.done():
+            old.cancel()
+        _album_tasks[album_key] = asyncio.create_task(
+            _flush_album_stock(
+                album_key=album_key, message=message, state=state, db_pool=db_pool
+            )
+        )
+        return
+
+    if rapid and db_pool is not None:
+        await _add_stock_item_now(
+            message, state, db_pool, pool_name, kind, file_id, unique_id
+        )
+        return
+
     await state.set_state(StockFSM.preview)
     await state.update_data(file_id=file_id, unique_id=unique_id, kind=kind)
     await _send_stock_preview(message, pool_name, kind, file_id)
@@ -905,9 +1022,14 @@ async def handle_fulfill(
             await message.answer(f"Commande #{order_id} introuvable.")
             return
         fulfillment = await fulfill_remaining_for_order(db_pool, order_id)
-        if not fulfillment.assets:
+        undelivered = await list_undelivered_assets_for_order(db_pool, order_id)
+        if undelivered:
+            fulfillment.assets = undelivered
+        elif not fulfillment.assets:
             fulfillment.assets = await list_assets_granted_for_order(db_pool, order_id)
-        send_errors = await deliver_fulfillment(bot, order.user_id, fulfillment)
+        send_errors = await deliver_fulfillment(
+            bot, order.user_id, fulfillment, order_id=order_id, db_pool=db_pool
+        )
         lines = [f"Relance #{order_id}."]
         lines.extend(admin_fulfillment_lines(fulfillment))
         lines.extend(f"⚠ {err}" for err in send_errors)

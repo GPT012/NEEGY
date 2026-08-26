@@ -251,6 +251,16 @@ CREATE TABLE IF NOT EXISTS reward_grants (
 CREATE INDEX IF NOT EXISTS idx_reward_grants_order_id ON reward_grants (order_id);
 CREATE INDEX IF NOT EXISTS idx_reward_grants_user_id ON reward_grants (user_id);
 
+ALTER TABLE reward_grants ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ NULL;
+CREATE INDEX IF NOT EXISTS idx_reward_grants_undelivered
+    ON reward_grants (id) WHERE delivered_at IS NULL;
+
+-- Assets encore libres : accélère le tirage en volume.
+CREATE INDEX IF NOT EXISTS idx_reward_assets_pool_unused
+    ON reward_assets (pool, id)
+    WHERE is_active = TRUE;
+
+
 -- Un fichier = une seule cliente (jamais le même média pour deux personnes).
 DELETE FROM reward_grants a
  USING reward_grants b
