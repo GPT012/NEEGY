@@ -106,6 +106,20 @@ def find_child_folder(parent_id: str, name: str) -> str | None:
     return None
 
 
+def find_slot_folder(parent_id: str, slot_number: int) -> str | None:
+    """Accepte slot_01, slot_1, Slot_01…"""
+    wanted = {slot_folder_name(slot_number).lower(), f"slot_{slot_number}"}
+    for child in _list_children(parent_id, folders_only=True):
+        name = (child.get("name") or "").strip()
+        low = name.lower()
+        if low in wanted:
+            return child["id"]
+        match = _SLOT_RE.match(name)
+        if match and int(match.group(1)) == slot_number:
+            return child["id"]
+    return None
+
+
 def resolve_path(folder_names: list[str]) -> str | None:
     if not is_drive_configured():
         return None
@@ -132,9 +146,15 @@ def slot_path(media_kind: str, price_eur: int, slot_number: int) -> str:
 
 
 def resolve_slot_folder_id(media_kind: str, price_eur: int, slot_number: int) -> str | None:
-    return resolve_path(
-        [media_root_name(media_kind), str(price_eur), slot_folder_name(slot_number)]
-    )
+    if not is_drive_configured():
+        return None
+    root_id = find_child_folder(config.google_drive_folder_id, media_root_name(media_kind))
+    if root_id is None:
+        return None
+    price_id = find_child_folder(root_id, str(price_eur))
+    if price_id is None:
+        return None
+    return find_slot_folder(price_id, slot_number)
 
 
 def infer_kind(file_name: str, mime_type: str, fallback: str) -> str:
@@ -347,7 +367,12 @@ def audit_slot_by_path(slot_path: str) -> list[str]:
     if root_name not in ("photos", "videos"):
         return ["Le 1er segment doit être photos ou videos."]
     media_kind = "photo" if root_name == "photos" else "video"
-    folder_id = resolve_path(parts)
+    slot_match = _SLOT_RE.match(parts[2])
+    if not slot_match:
+        return [f"❌ Nom invalide : {parts[2]} — utilise slot_01, slot_02…"]
+    folder_id = resolve_slot_folder_id(
+        media_kind, int(parts[1]), int(slot_match.group(1))
+    )
     if folder_id is None:
         return [f"❌ Dossier introuvable : {slot_path}"]
     lines = [f"📂 {slot_path}"]
