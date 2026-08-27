@@ -123,6 +123,8 @@ class FulfillmentResult:
     call_slot: CallSlot | None = None
     shipped_complete: bool = False
     needs_manual_ship: bool = False
+    drive_slot_path: str | None = None
+    drive_slot_number: int | None = None
 
     def __post_init__(self) -> None:
         if self.assets is None:
@@ -1421,12 +1423,32 @@ async def fulfill_paid_order(connection: asyncpg.Connection, order_id: int) -> F
                 connection, user_id, order_id, int(item["wheel_id"]), result
             )
         elif item["category"] in ("photo", "video"):
-            pool_name = _MEDIA_POOL_BY_CATEGORY.get(item["category"])
-            count = max(1, int(item["reward_count"] or 1))
             result.prize_kind = item["category"]
             result.prize_label = result.prize_label or (
                 "Photo" if item["category"] == "photo" else "Vidéo"
             )
+            # Source principale : Google Drive (slots). Fallback file Telegram si Drive off.
+            from services.drive import is_drive_configured
+            from services.drive_delivery import assign_drive_slot_for_item
+
+            if is_drive_configured():
+                slot_number, path, warning = await assign_drive_slot_for_item(
+                    connection,
+                    user_id=user_id,
+                    order_id=order_id,
+                    media_kind=item["category"],
+                    price_cents=int(item["price_cents"]),
+                )
+                result.drive_slot_number = slot_number
+                result.drive_slot_path = path
+                result.prize_label = f"{result.prize_label} · {path}"
+                if warning:
+                    result.warnings.append(warning)
+                    result.needs_manual_ship = True
+                continue
+
+            pool_name = _MEDIA_POOL_BY_CATEGORY.get(item["category"])
+            count = max(1, int(item["reward_count"] or 1))
             if not pool_name:
                 result.needs_manual_ship = True
                 result.warnings.append(

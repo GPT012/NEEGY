@@ -277,3 +277,42 @@ UPDATE wheel_prizes SET content_pool = 'photos' WHERE content_pool = 'wheel5_pho
 UPDATE wheel_prizes SET content_pool = 'videos'
  WHERE content_pool IN ('wheel5_video', 'wheel20_video');
 
+-- Packs boutique via Google Drive (progression slot_01, slot_02… par cliente/tarif).
+CREATE TABLE IF NOT EXISTS drive_slot_deliveries (
+    id               SERIAL PRIMARY KEY,
+    order_id         INTEGER NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
+    user_id          BIGINT NOT NULL,
+    media_kind       TEXT NOT NULL CHECK (media_kind IN ('photo', 'video')),
+    price_eur        INTEGER NOT NULL CHECK (price_eur > 0),
+    slot_number      INTEGER NOT NULL CHECK (slot_number > 0),
+    slot_path        TEXT NOT NULL,
+    drive_folder_id  TEXT,
+    delivered_at     TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_drive_slot_progress
+    ON drive_slot_deliveries (user_id, media_kind, price_eur);
+
+CREATE TABLE IF NOT EXISTS drive_file_cache (
+    drive_file_id    TEXT PRIMARY KEY,
+    telegram_file_id TEXT NOT NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('photo', 'video')),
+    file_name        TEXT NOT NULL DEFAULT '',
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS drive_order_files (
+    id               SERIAL PRIMARY KEY,
+    order_id         INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    drive_file_id    TEXT NOT NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('photo', 'video')),
+    file_name        TEXT NOT NULL DEFAULT '',
+    telegram_file_id TEXT,
+    delivered_at     TIMESTAMPTZ,
+    UNIQUE (order_id, drive_file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drive_order_files_order
+    ON drive_order_files (order_id);
+

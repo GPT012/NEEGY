@@ -181,6 +181,9 @@ async def deliver_order_media(
     retries: int = 3,
 ) -> tuple[FulfillmentResult, list[str]]:
     """Attribue le stock manquant si besoin, puis envoie (avec retries) les fichiers non livrés."""
+    from services.drive import is_drive_configured
+    from services.drive_delivery import deliver_drive_for_order, get_drive_delivery
+
     order = await get_order(db_pool, order_id)
     if order is None:
         empty = FulfillmentResult(warnings=[f"Commande #{order_id} introuvable."])
@@ -188,6 +191,29 @@ async def deliver_order_media(
 
     fulfillment = await fulfill_remaining_for_order(db_pool, order_id)
     send_errors: list[str] = []
+
+    # Packs boutique via Drive (prioritaire si configuré).
+    if is_drive_configured():
+        drive_row = await get_drive_delivery(db_pool, order_id)
+        if drive_row is not None:
+            fulfillment.drive_slot_path = drive_row["slot_path"]
+            fulfillment.drive_slot_number = int(drive_row["slot_number"])
+            fulfillment.prize_kind = drive_row["media_kind"]
+            fulfillment.prize_label = (
+                f"{'Photo' if drive_row['media_kind'] == 'photo' else 'Vidéo'} "
+                f"· {drive_row['slot_path']}"
+            )
+            for attempt in range(max(1, retries)):
+                drive_errors, drive_ok = await deliver_drive_for_order(bot, db_pool, order_id)
+                if drive_ok:
+                    fulfillment.shipped_complete = True
+                    return fulfillment, []
+                send_errors = list(drive_errors)
+                if any("pas de /start" in e or "bloqué" in e for e in send_errors):
+                    break
+                if attempt + 1 < retries:
+                    await asyncio.sleep(1.2 * (attempt + 1))
+            return fulfillment, send_errors
 
     for attempt in range(max(1, retries)):
         undelivered = await list_undelivered_assets_for_order(db_pool, order_id)
@@ -230,6 +256,8 @@ def admin_fulfillment_lines(fulfillment: FulfillmentResult) -> list[str]:
         extra = f" (+{fulfillment.points_amount} pts)" if fulfillment.points_amount else ""
         kind = f" [{fulfillment.prize_kind}]" if fulfillment.prize_kind else ""
         lines.append(f"→ Lot : {fulfillment.prize_label}{kind}{extra}")
+    if fulfillment.drive_slot_path:
+        lines.append(f"→ Drive : {fulfillment.drive_slot_path}")
     if fulfillment.assets:
         photos = sum(1 for a in fulfillment.assets if a.kind == "photo")
         videos = sum(1 for a in fulfillment.assets if a.kind == "video")
@@ -239,8 +267,8 @@ def admin_fulfillment_lines(fulfillment: FulfillmentResult) -> list[str]:
         if videos:
             parts.append(f"{videos} vidéo(s)")
         lines.append(f"→ Fichier(s) à envoyer : {', '.join(parts) or f'{len(fulfillment.assets)}'}.")
-    elif fulfillment.prize_kind in ("photo", "video"):
-        lines.append("→ Aucun fichier (file vide). Remplis /depot puis /fulfill.")
+    elif fulfillment.prize_kind in ("photo", "video") and not fulfillment.drive_slot_path:
+        lines.append("→ Aucun fichier (file vide). Remplis /depot ou configure Drive.")
     if fulfillment.shipped_complete:
         lines.append("→ Média livré automatiquement.")
     for warning in fulfillment.warnings:

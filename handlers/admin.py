@@ -706,6 +706,34 @@ async def handle_admin_settings(
         await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
 
 
+@router.message(Command("drive_check"))
+async def handle_drive_check(message: Message) -> None:
+    from services.drive import audit_structure, is_drive_configured
+
+    if not is_drive_configured():
+        await message.answer(
+            "Google Drive pas encore actif.\n\n"
+            "1. Google Cloud → crée un projet → active « Google Drive API »\n"
+            "2. Compte de service → clé JSON\n"
+            "3. Partage ton dossier NEEGY_STOCK avec l'email du compte (Lecteur)\n"
+            "4. Railway → variable GOOGLE_SERVICE_ACCOUNT_JSON = contenu du JSON\n"
+            "5. GOOGLE_DRIVE_FOLDER_ID est déjà prêt (ton dossier)\n\n"
+            "Puis /drive_check à nouveau."
+        )
+        return
+    await message.answer("Vérification Drive…")
+    try:
+        lines = await asyncio.to_thread(audit_structure)
+    except Exception:
+        logger.exception("drive_check")
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+    text = "📁 Drive check\n\n" + "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:3900] + "\n…"
+    await message.answer(text)
+
+
 @router.message(Command("stock"))
 async def handle_stock(
     message: Message, command: CommandObject, state: FSMContext, db_pool: asyncpg.Pool | None

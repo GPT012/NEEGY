@@ -6,8 +6,11 @@ fichier .env (voir .env.example pour la liste des variables attendues).
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -74,6 +77,27 @@ def _get_required_int(name: str) -> int:
         ) from exc
 
 
+def _parse_google_service_account(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    text = raw.strip()
+    try:
+        if text.startswith("{"):
+            data = json.loads(text)
+        else:
+            data = json.loads(base64.b64decode(text).decode("utf-8"))
+    except Exception as exc:
+        raise ConfigError(
+            "GOOGLE_SERVICE_ACCOUNT_JSON doit être le JSON du compte de service "
+            "(brut ou en base64)."
+        ) from exc
+    if not isinstance(data, dict) or "client_email" not in data or "private_key" not in data:
+        raise ConfigError(
+            "GOOGLE_SERVICE_ACCOUNT_JSON invalide (client_email / private_key manquants)."
+        )
+    return data
+
+
 @dataclass(frozen=True)
 class Config:
     bot_token: str
@@ -94,6 +118,10 @@ class Config:
     # Chat/groupe Telegram où tu déposes photos & vidéos (style Drive).
     # Laisse vide pour n'utiliser que la commande /depot en privé avec le bot.
     stock_deposit_chat_id: int | None
+
+    # Google Drive : dossier NEEGY_STOCK + JSON du compte de service.
+    google_drive_folder_id: str | None
+    google_service_account_info: dict | None
 
     paypal_url: str | None
     bank_iban: str | None
@@ -157,6 +185,14 @@ def load_config() -> Config:
         _get_required_int("STOCK_DEPOSIT_CHAT_ID") if deposit_chat_raw else None
     )
 
+    # Dossier Drive fourni par l'admin (NEEGY_STOCK).
+    google_drive_folder_id = (
+        _get_str("GOOGLE_DRIVE_FOLDER_ID") or "1uzZ27BUbaAsl6Rz4E4oHWNmTqD57gE2l"
+    )
+    google_service_account_info = _parse_google_service_account(
+        _get_str("GOOGLE_SERVICE_ACCOUNT_JSON")
+    )
+
     paypal_url = _get_str("PAYPAL_URL") or "https://www.paypal.me/Carlabdrrr"
     _check_https_url("PAYPAL_URL", paypal_url, "https://paypal.me/toncompte")
 
@@ -175,6 +211,8 @@ def load_config() -> Config:
         mini_app_short_name=_get_str("MINI_APP_SHORT_NAME"),
         admin_user_id=admin_user_id,
         stock_deposit_chat_id=stock_deposit_chat_id,
+        google_drive_folder_id=google_drive_folder_id,
+        google_service_account_info=google_service_account_info,
         paypal_url=paypal_url,
         bank_iban=_get_str("BANK_IBAN") or "FR76 2823 3000 0106 8425 4424 364",
         bank_holder=_get_str("BANK_HOLDER") or "Selma Kouassi",

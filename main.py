@@ -57,6 +57,7 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="addslot", description="Ajouter un créneau"),
     BotCommand(command="depot", description="Dépôt Drive photos/vidéos"),
     BotCommand(command="depot_stop", description="Fermer le dépôt"),
+    BotCommand(command="drive_check", description="Vérifier Google Drive"),
     BotCommand(command="stock", description="Remplir photos et vidéos"),
     BotCommand(command="grants", description="Qui a reçu quel lot"),
     BotCommand(command="rewards", description="Alias de /grants"),
