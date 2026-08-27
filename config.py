@@ -77,6 +77,20 @@ def _get_required_int(name: str) -> int:
         ) from exc
 
 
+def _sanitize_drive_folder_id(raw: str | None) -> str | None:
+    """Nettoie un ID Drive collé avec du texte d'aide (ex: '… (déjà le défaut)')."""
+    if not raw:
+        return None
+    text = raw.strip().strip('"').strip("'")
+    # Coupe tout commentaire / parenthèse / espace après l'ID.
+    for sep in (" ", "(", "\n", "\t", "#"):
+        if sep in text:
+            text = text.split(sep, 1)[0].strip()
+    # Les IDs Drive sont alphanumériques + _ -
+    cleaned = "".join(c for c in text if c.isalnum() or c in "_-")
+    return cleaned or None
+
+
 def _parse_google_service_account(raw: str | None) -> dict[str, Any] | None:
     """Parse le JSON du compte de service. Jamais bloquant : échec → Drive désactivé."""
     if not raw:
@@ -271,9 +285,9 @@ def load_config() -> Config:
     )
 
     # Dossier Drive fourni par l'admin (NEEGY_STOCK).
-    google_drive_folder_id = (
-        _get_str("GOOGLE_DRIVE_FOLDER_ID") or "1uzZ27BUbaAsl6Rz4E4oHWNmTqD57gE2l"
-    )
+    google_drive_folder_id = _sanitize_drive_folder_id(
+        _get_str("GOOGLE_DRIVE_FOLDER_ID")
+    ) or "1uzZ27BUbaAsl6Rz4E4oHWNmTqD57gE2l"
     google_service_account_info = _parse_google_service_account(
         _get_str("GOOGLE_SERVICE_ACCOUNT_JSON")
     )
