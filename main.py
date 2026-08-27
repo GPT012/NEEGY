@@ -30,7 +30,7 @@ from aiohttp import web
 from api import webapp_routes
 from config import config
 from db.pool import close_pool, create_pool, describe_dsn
-from handlers import admin, commands, inline, menu
+from handlers import admin, commands, deposit, inline, menu
 from middlewares.throttling import ThrottlingMiddleware
 from utils.logger import get_logger, setup_logging
 
@@ -55,6 +55,8 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="cancel", description="Annuler une commande pending"),
     BotCommand(command="slots", description="Créneaux d'appel"),
     BotCommand(command="addslot", description="Ajouter un créneau"),
+    BotCommand(command="depot", description="Dépôt Drive photos/vidéos"),
+    BotCommand(command="depot_stop", description="Fermer le dépôt"),
     BotCommand(command="stock", description="Remplir photos et vidéos"),
     BotCommand(command="grants", description="Qui a reçu quel lot"),
     BotCommand(command="rewards", description="Alias de /grants"),
@@ -74,6 +76,7 @@ def create_dispatcher() -> Dispatcher:
     dispatcher.message.middleware(ThrottlingMiddleware())
     dispatcher.callback_query.middleware(ThrottlingMiddleware())
 
+    dispatcher.include_router(deposit.router)
     dispatcher.include_router(admin.router)
     dispatcher.include_router(commands.router)
     dispatcher.include_router(inline.router)

@@ -42,7 +42,7 @@ from db.repository import (
     upsert_cart_item,
 )
 from keyboards.admin import pay_received_keyboard
-from handlers.rewards import admin_fulfillment_lines, deliver_fulfillment
+from handlers.rewards import admin_fulfillment_lines, deliver_order_media
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -538,20 +538,30 @@ async def pay_with_points(request: web.Request) -> web.Response:
 
     order = await get_order(pool, order_id)
     try:
-        await deliver_fulfillment(
-            bot, user_id, fulfillment, order_id=order_id, db_pool=pool
-        )
+        fulfillment, send_errors = await deliver_order_media(bot, pool, order_id)
         call_slot = await get_call_slot_for_order(pool, order_id)
         if call_slot is not None and fulfillment.call_slot is None:
             await bot.send_message(
                 user_id,
                 f"📞 Ton appel du {call_slot.start_at:%d/%m/%Y à %H:%M} UTC est confirmé !",
             )
-        delivered = bool(fulfillment.assets or fulfillment.points_amount or fulfillment.call_slot)
-        if call_slot is None and not delivered:
+        delivered = bool(
+            fulfillment.shipped_complete
+            or fulfillment.points_amount
+            or fulfillment.call_slot
+            or (fulfillment.assets and not send_errors)
+        )
+        if call_slot is None and not delivered and not fulfillment.assets:
             await bot.send_message(
                 user_id,
                 f"✅ Commande #{order_id} payée avec {points_spent} points. Merci !",
+            )
+        if send_errors and admin_user_id:
+            await bot.send_message(
+                admin_user_id,
+                f"❌ Envoi incomplet #{order_id}\n"
+                + "\n".join(f"⚠ {e}" for e in send_errors)
+                + f"\n→ /fulfill {order_id}",
             )
     except Exception:
         logger.exception("Impossible de notifier le client user_id=%s après paiement points", user_id)

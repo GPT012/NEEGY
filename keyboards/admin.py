@@ -62,7 +62,7 @@ def settings_keyboard(
         n = (stock_counts or {}).get(pool_name, 0)
         kind_mark = "vidéo" if kind == "video" else "photo"
         builder.button(
-            text=f"Stock · {label} · {n}",
+            text=f"Stock · {label} · {n} libres",
             callback_data=f"{CALLBACK_STOCK_POOL_PREFIX}{pool_name}",
         )
     for product in media_products or []:

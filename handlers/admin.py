@@ -33,19 +33,16 @@ from db.repository import (
     create_call_slot,
     customer_hint_suffix,
     find_user_id_by_username,
-    fulfill_remaining_for_order,
     get_call_slot_for_order,
     get_order,
     get_photo_items_label,
     list_client_folders,
     list_grants_for_order,
     list_grants_for_user,
-    list_assets_granted_for_order,
     list_media_products,
     list_orders_to_ship,
     list_pending_orders,
     list_reward_stock,
-    list_undelivered_assets_for_order,
     list_upcoming_call_slots,
     mark_order_paid,
     mark_order_shipped,
@@ -53,7 +50,7 @@ from db.repository import (
     tag_user,
     untag_user,
 )
-from handlers.rewards import admin_fulfillment_lines, deliver_fulfillment
+from handlers.rewards import admin_fulfillment_lines, deliver_order_media
 from keyboards.admin import (
     CALLBACK_PAY_PREFIX,
     CALLBACK_PREVIEW_CLEAR_PREFIX,
@@ -179,19 +176,32 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
     if order is None:
         return f"Commande #{order_id} introuvable.", False
     if order.status != "pending":
-        return f"Commande #{order_id} déjà traitée (statut : {order.status}).", False
+        # Paiement déjà confirmé : on tente quand même de (re)livrer le média.
+        fulfillment, send_errors = await deliver_order_media(bot, db_pool, order_id)
+        lines = [
+            f"Commande #{order_id} déjà {order.status} — relance d'envoi.",
+            *admin_fulfillment_lines(fulfillment),
+            *(f"⚠ {err}" for err in send_errors),
+        ]
+        if send_errors:
+            lines.append(f"→ Réessaie avec /fulfill {order_id}")
+        photo_label = await get_photo_items_label(db_pool, order_id)
+        show_ship = bool(photo_label) and not fulfillment.shipped_complete
+        return "\n".join(lines), show_ship
 
     marked, fulfillment = await mark_order_paid(db_pool, order_id)
     if not marked or fulfillment is None:
         return f"Commande #{order_id} déjà traitée entre-temps.", False
 
     summary_lines = [f"✅ Commande #{order_id} confirmée."]
+    # Envoi média avec retries (cœur du parcours cliente).
+    fulfillment, send_errors = await deliver_order_media(bot, db_pool, order_id)
     summary_lines.extend(admin_fulfillment_lines(fulfillment))
-
-    send_errors = await deliver_fulfillment(
-        bot, order.user_id, fulfillment, order_id=order_id, db_pool=db_pool
-    )
     summary_lines.extend(f"⚠ {err}" for err in send_errors)
+    if send_errors:
+        summary_lines.append(
+            f"❌ ENVOI INCOMPLET — après /start de la cliente : /fulfill {order_id}"
+        )
 
     call_slot = await get_call_slot_for_order(db_pool, order_id)
     slot_conflict = any("déjà été pris" in w for w in fulfillment.warnings)
@@ -205,7 +215,12 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (appel confirmé)", order.user_id)
 
-    delivered = bool(fulfillment.assets or fulfillment.points_amount or fulfillment.call_slot)
+    delivered = bool(
+        fulfillment.shipped_complete
+        or fulfillment.points_amount
+        or fulfillment.call_slot
+        or (fulfillment.assets and not send_errors)
+    )
     if slot_conflict:
         try:
             await bot.send_message(
@@ -214,7 +229,8 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
             )
         except Exception:
             logger.exception("Impossible de notifier le client user_id=%s (créneau pris)", order.user_id)
-    elif call_slot is None and not delivered:
+    elif call_slot is None and not delivered and not fulfillment.assets:
+        # Pas de média / points / appel : simple accusé.
         try:
             await bot.send_message(order.user_id, f"✅ Ta commande #{order_id} est confirmée, merci !")
         except Exception:
@@ -224,7 +240,7 @@ async def _confirm_payment(bot: Bot, db_pool: asyncpg.Pool, order_id: int) -> tu
     show_ship = bool(photo_label) and not fulfillment.shipped_complete
     if show_ship:
         who = _who(order.customer_name, order.telegram_username, order.user_id)
-        summary_lines.append(f"→ À envoyer : {photo_label} — {who}")
+        summary_lines.append(f"→ À envoyer / relancer : {photo_label} — {who}")
         return "\n".join(summary_lines), True
 
     return "\n".join(summary_lines), False
@@ -368,7 +384,7 @@ async def handle_orders(message: Message, db_pool: asyncpg.Pool | None) -> None:
 
 @router.message(Command("ship"))
 async def handle_ship(
-    message: Message, command: CommandObject, db_pool: asyncpg.Pool | None
+    message: Message, command: CommandObject, bot: Bot, db_pool: asyncpg.Pool | None
 ) -> None:
     if db_pool is None:
         await message.answer("Base de données indisponible pour le moment.")
@@ -381,7 +397,14 @@ async def handle_ship(
     order_id = int(args[0])
 
     try:
-        shipped = await mark_order_shipped(db_pool, order_id)
+        fulfillment, send_errors = await deliver_order_media(bot, db_pool, order_id)
+        if send_errors:
+            await message.answer(
+                f"#{order_id} envoi incomplet.\n"
+                + "\n".join(f"⚠ {e}" for e in send_errors)
+            )
+            return
+        shipped = fulfillment.shipped_complete or await mark_order_shipped(db_pool, order_id)
     except Exception:
         logger.exception("Erreur lors du marquage envoyé de la commande #%s", order_id)
         await message.answer(GENERIC_ERROR_MESSAGE)
@@ -511,7 +534,7 @@ def _expected_kind_label(kind: str) -> str:
 
 async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
     rows = await list_reward_stock(db_pool)
-    counts = {name: total for name, total, _unused in rows}
+    counts = {name: unused for name, _total, unused in rows}
     media = await list_media_products(db_pool)
     lines = [
         "⚙️ Paramètres\n",
@@ -519,7 +542,7 @@ async def _stock_menu_content(db_pool: asyncpg.Pool) -> tuple[str, object]:
         "• File photos → packs Photo + lot photo Rose\n"
         "• File vidéos → packs Vidéo + lots vidéo Rose / Nuit\n"
         "Chaque fichier n'est donné qu'à une seule cliente.\n"
-        "Astuce stock : album Telegram ou mode rapide (sans preview).\n",
+        "Astuce stock : /depot (Drive) ou album / mode rapide.\n",
         "Previews boutique : 1 média par tarif, visible au clic.\n",
     ]
     for name, total, unused in rows:
@@ -1017,22 +1040,12 @@ async def handle_fulfill(
         return
     order_id = int(args[0])
     try:
-        order = await get_order(db_pool, order_id)
-        if order is None:
-            await message.answer(f"Commande #{order_id} introuvable.")
-            return
-        fulfillment = await fulfill_remaining_for_order(db_pool, order_id)
-        undelivered = await list_undelivered_assets_for_order(db_pool, order_id)
-        if undelivered:
-            fulfillment.assets = undelivered
-        elif not fulfillment.assets:
-            fulfillment.assets = await list_assets_granted_for_order(db_pool, order_id)
-        send_errors = await deliver_fulfillment(
-            bot, order.user_id, fulfillment, order_id=order_id, db_pool=db_pool
-        )
+        fulfillment, send_errors = await deliver_order_media(bot, db_pool, order_id)
         lines = [f"Relance #{order_id}."]
         lines.extend(admin_fulfillment_lines(fulfillment))
         lines.extend(f"⚠ {err}" for err in send_errors)
+        if not send_errors and fulfillment.shipped_complete:
+            lines.append("✅ Livré.")
         await message.answer("\n".join(lines))
     except Exception:
         logger.exception("Erreur /fulfill #%s", order_id)
@@ -1074,15 +1087,26 @@ async def handle_pay_callback(
         return
     try:
         text, show_ship = await _confirm_payment(bot, db_pool, order_id)
+        failed = "ENVOI INCOMPLET" in text or "file vide" in text or "Stock insuffisant" in text
         if _is_orders_inbox(callback):
-            toast = "Confirmé" if "confirmée" in text else text[:180]
-            await _refresh_orders_inbox(callback, db_pool, toast=toast)
+            await callback.answer(
+                "Échec envoi — détail en message" if failed else "Confirmé",
+                show_alert=failed,
+            )
+            inbox_text, inbox_markup = await _orders_inbox(db_pool)
+            if callback.message is not None:
+                try:
+                    await callback.message.edit_text(inbox_text, reply_markup=inbox_markup)
+                except TelegramBadRequest:
+                    pass
+            if failed or "⚠" in text:
+                await bot.send_message(callback.from_user.id, text)
             return
         await _respond_admin_callback(
             callback,
             text,
             shipped_keyboard(order_id) if show_ship else None,
-            toast="Confirmé",
+            toast="Échec envoi" if failed else "Confirmé",
         )
     except Exception:
         logger.exception("Erreur callback paiement commande #%s", order_id)
@@ -1090,7 +1114,9 @@ async def handle_pay_callback(
 
 
 @router.callback_query(F.from_user.id == config.admin_user_id, F.data.startswith(CALLBACK_SHIP_PREFIX))
-async def handle_ship_callback(callback: CallbackQuery, db_pool: asyncpg.Pool | None) -> None:
+async def handle_ship_callback(
+    callback: CallbackQuery, bot: Bot, db_pool: asyncpg.Pool | None
+) -> None:
     order_id = _parse_order_callback(callback.data, CALLBACK_SHIP_PREFIX)
     if order_id is None:
         await callback.answer("Commande invalide.", show_alert=True)
@@ -1099,7 +1125,22 @@ async def handle_ship_callback(callback: CallbackQuery, db_pool: asyncpg.Pool | 
         await callback.answer("Base indisponible.", show_alert=True)
         return
     try:
-        shipped = await mark_order_shipped(db_pool, order_id)
+        fulfillment, send_errors = await deliver_order_media(bot, db_pool, order_id)
+        if send_errors:
+            await callback.answer("Envoi incomplet", show_alert=True)
+            await bot.send_message(
+                callback.from_user.id,
+                f"#{order_id}\n" + "\n".join(f"⚠ {e}" for e in send_errors),
+            )
+            if _is_orders_inbox(callback):
+                inbox_text, inbox_markup = await _orders_inbox(db_pool)
+                if callback.message is not None:
+                    try:
+                        await callback.message.edit_text(inbox_text, reply_markup=inbox_markup)
+                    except TelegramBadRequest:
+                        pass
+            return
+        shipped = fulfillment.shipped_complete or await mark_order_shipped(db_pool, order_id)
     except Exception:
         logger.exception("Erreur callback envoi commande #%s", order_id)
         await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)

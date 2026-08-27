@@ -1423,6 +1423,10 @@ async def fulfill_paid_order(connection: asyncpg.Connection, order_id: int) -> F
         elif item["category"] in ("photo", "video"):
             pool_name = _MEDIA_POOL_BY_CATEGORY.get(item["category"])
             count = max(1, int(item["reward_count"] or 1))
+            result.prize_kind = item["category"]
+            result.prize_label = result.prize_label or (
+                "Photo" if item["category"] == "photo" else "Vidéo"
+            )
             if not pool_name:
                 result.needs_manual_ship = True
                 result.warnings.append(
@@ -1435,7 +1439,18 @@ async def fulfill_paid_order(connection: asyncpg.Connection, order_id: int) -> F
             )
             needed = count - int(already or 0)
             if needed <= 0:
-                result.shipped_complete = True
+                # Recharge les fichiers déjà attribués (ex: /fulfill) pour pouvoir les renvoyer.
+                granted_rows = await connection.fetch(
+                    """
+                    SELECT a.id, a.pool, a.kind, a.telegram_file_id, a.caption
+                    FROM reward_grants g
+                    JOIN reward_assets a ON a.id = g.asset_id
+                    WHERE g.order_id = $1 AND g.source = 'booster'
+                    ORDER BY g.id
+                    """,
+                    order_id,
+                )
+                result.assets.extend(_row_to_asset(row) for row in granted_rows)
                 continue
             assets, warning = await _grant_assets(
                 connection, user_id, order_id, pool_name, needed, "booster"
@@ -1444,17 +1459,8 @@ async def fulfill_paid_order(connection: asyncpg.Connection, order_id: int) -> F
             if warning:
                 result.warnings.append(warning)
                 result.needs_manual_ship = True
-            granted = int(already or 0) + len(assets)
-            if granted >= count:
-                await connection.execute(
-                    """
-                    UPDATE orders SET shipped_at = now()
-                    WHERE id = $1 AND shipped_at IS NULL
-                    """,
-                    order_id,
-                )
-                result.shipped_complete = True
-            else:
+            # shipped_at est posé APRÈS envoi Telegram réussi (voir deliver_fulfillment).
+            if int(already or 0) + len(assets) < count:
                 result.needs_manual_ship = True
     return result
 
@@ -1705,7 +1711,7 @@ async def list_pending_orders(pool: asyncpg.Pool) -> list[ShipTask]:
 
 
 async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
-    """Commandes payées dont les photos n'ont pas encore été envoyées."""
+    """Commandes payées pas encore livrées (ou avec envoi Telegram incomplet)."""
     rows = await pool.fetch(
         """
         SELECT
@@ -1722,8 +1728,14 @@ async def list_orders_to_ship(pool: asyncpg.Pool) -> list[ShipTask]:
         JOIN order_items oi ON oi.order_id = o.id
         JOIN products p ON p.id = oi.product_id
         WHERE o.status = 'paid'
-          AND o.shipped_at IS NULL
           AND p.category IN ('photo', 'video')
+          AND (
+            o.shipped_at IS NULL
+            OR EXISTS (
+                SELECT 1 FROM reward_grants g
+                WHERE g.order_id = o.id AND g.delivered_at IS NULL
+            )
+          )
         GROUP BY o.id, o.user_id, o.customer_name, o.telegram_username
         ORDER BY o.id
         """
@@ -1759,6 +1771,31 @@ async def mark_order_shipped(pool: asyncpg.Pool, order_id: int) -> bool:
         order_id,
     )
     return result.endswith(" 1")
+
+
+async def count_undelivered_grants(pool: asyncpg.Pool, order_id: int) -> int:
+    value = await pool.fetchval(
+        """
+        SELECT COUNT(*)::int FROM reward_grants
+        WHERE order_id = $1 AND delivered_at IS NULL
+        """,
+        order_id,
+    )
+    return int(value or 0)
+
+
+async def mark_order_shipped_if_delivered(pool: asyncpg.Pool, order_id: int) -> bool:
+    """Pose shipped_at seulement si tous les grants de la commande sont délivrés."""
+    pending = await count_undelivered_grants(pool, order_id)
+    if pending > 0:
+        return False
+    has_grants = await pool.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM reward_grants WHERE order_id = $1)",
+        order_id,
+    )
+    if not has_grants:
+        return False
+    return await mark_order_shipped(pool, order_id)
 
 
 async def _enrich_ship_tasks(pool: asyncpg.Pool, tasks: list[ShipTask]) -> list[ShipTask]:

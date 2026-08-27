@@ -91,6 +91,10 @@ class Config:
 
     admin_user_id: int | None
 
+    # Chat/groupe Telegram où tu déposes photos & vidéos (style Drive).
+    # Laisse vide pour n'utiliser que la commande /depot en privé avec le bot.
+    stock_deposit_chat_id: int | None
+
     paypal_url: str | None
     bank_iban: str | None
     bank_holder: str | None
@@ -148,6 +152,11 @@ def load_config() -> Config:
     admin_user_id_raw = _get_str("ADMIN_USER_ID")
     admin_user_id = _get_required_int("ADMIN_USER_ID") if admin_user_id_raw else None
 
+    deposit_chat_raw = _get_str("STOCK_DEPOSIT_CHAT_ID")
+    stock_deposit_chat_id = (
+        _get_required_int("STOCK_DEPOSIT_CHAT_ID") if deposit_chat_raw else None
+    )
+
     paypal_url = _get_str("PAYPAL_URL") or "https://www.paypal.me/Carlabdrrr"
     _check_https_url("PAYPAL_URL", paypal_url, "https://paypal.me/toncompte")
 
@@ -165,6 +174,7 @@ def load_config() -> Config:
         mini_app_url=mini_app_url,
         mini_app_short_name=_get_str("MINI_APP_SHORT_NAME"),
         admin_user_id=admin_user_id,
+        stock_deposit_chat_id=stock_deposit_chat_id,
         paypal_url=paypal_url,
         bank_iban=_get_str("BANK_IBAN") or "FR76 2823 3000 0106 8425 4424 364",
         bank_holder=_get_str("BANK_HOLDER") or "Selma Kouassi",
