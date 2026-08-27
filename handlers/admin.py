@@ -720,27 +720,46 @@ async def handle_drive_check(message: Message) -> None:
             "neegs-965@neegy-506816.iam.gserviceaccount.com (Lecteur)."
         )
         return
-    await message.answer("Vérification Drive (max ~25s)…")
+
+    status = await message.answer(
+        "Vérification Drive…\n"
+        "Si rien ne vient en 20s, le problème est côté Google (API / partage)."
+    )
     clear_drive_service_cache()
+
+    async def _run() -> list[str]:
+        return await asyncio.to_thread(audit_structure)
+
     try:
-        lines = await asyncio.wait_for(asyncio.to_thread(audit_structure), timeout=25)
+        lines = await asyncio.wait_for(_run(), timeout=20)
+        text = "📁 Drive check\n\n" + "\n".join(lines)
+        if len(text) > 4000:
+            text = text[:3900] + "\n…"
+        try:
+            await status.edit_text(text)
+        except TelegramBadRequest:
+            await message.answer(text)
     except asyncio.TimeoutError:
-        await message.answer(
-            "⏱ Drive ne répond pas à temps.\n"
-            "Vérifie :\n"
-            "• Google Drive API activée sur le projet neegy-506816\n"
-            "• Dossier partagé avec neegs-965@neegy-506816.iam.gserviceaccount.com (Lecteur)\n"
-            "Puis /drive_check à nouveau."
+        text = (
+            "⏱ Timeout 20s — Google ne répond pas.\n\n"
+            "Fais ces 2 checks maintenant :\n"
+            "1) https://console.cloud.google.com/apis/library/drive.googleapis.com\n"
+            "   Projet neegy-506816 → bouton Activer\n"
+            "2) Drive → ton dossier → Partager →\n"
+            "   neegs-965@neegy-506816.iam.gserviceaccount.com → Lecteur\n\n"
+            "Sans ces 2 points, le bot ne peut pas lire le Drive."
         )
-        return
-    except Exception:
+        try:
+            await status.edit_text(text)
+        except TelegramBadRequest:
+            await message.answer(text)
+    except Exception as exc:
         logger.exception("drive_check")
-        await message.answer(GENERIC_ERROR_MESSAGE)
-        return
-    text = "📁 Drive check\n\n" + "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:3900] + "\n…"
-    await message.answer(text)
+        text = f"❌ Erreur Drive : {exc}"
+        try:
+            await status.edit_text(text)
+        except TelegramBadRequest:
+            await message.answer(text)
 
 
 @router.message(Command("stock"))

@@ -6,6 +6,7 @@ import io
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 
 from config import config
 from utils.logger import get_logger
@@ -14,10 +15,11 @@ logger = get_logger(__name__)
 
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 _SLOT_RE = re.compile(r"^slot_(\d+)$", re.IGNORECASE)
-_HTTP_TIMEOUT_SECONDS = 20
+_HTTP_TIMEOUT = 12
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+_DRIVE_API = "https://www.googleapis.com/drive/v3"
 
 
 @dataclass(frozen=True)
@@ -33,18 +35,15 @@ def is_drive_configured() -> bool:
 
 
 @lru_cache(maxsize=1)
-def _drive_service():
+def _authorized_session():
+    """Session HTTP avec timeout — sans googleapiclient (évite les blocages)."""
     if not is_drive_configured():
         return None
     try:
-        import google_auth_httplib2
-        import httplib2
+        from google.auth.transport.requests import AuthorizedSession
         from google.oauth2 import service_account
-        from googleapiclient.discovery import build
     except ImportError:
-        logger.error(
-            "Paquets Google absents — google-api-python-client / google-auth / httplib2"
-        )
+        logger.error("google-auth / requests manquants")
         return None
 
     info = config.google_service_account_info
@@ -53,21 +52,25 @@ def _drive_service():
         info,
         scopes=["https://www.googleapis.com/auth/drive.readonly"],
     )
-    # Timeout obligatoire : sinon un accès Drive bloqué fait "mouliner" Telegram.
-    http = google_auth_httplib2.AuthorizedHttp(
-        creds, http=httplib2.Http(timeout=_HTTP_TIMEOUT_SECONDS)
-    )
-    return build("drive", "v3", http=http, cache_discovery=False)
+    return AuthorizedSession(creds)
 
 
 def clear_drive_service_cache() -> None:
-    _drive_service.cache_clear()
+    _authorized_session.cache_clear()
+
+
+def _drive_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    session = _authorized_session()
+    if session is None:
+        raise RuntimeError("Drive non configuré")
+    url = f"{_DRIVE_API}{path}"
+    response = session.get(url, params=params or {}, timeout=_HTTP_TIMEOUT)
+    if response.status_code >= 400:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
+    return response.json()
 
 
 def _list_children(parent_id: str, *, folders_only: bool | None = None) -> list[dict]:
-    service = _drive_service()
-    if service is None:
-        return []
     parts = [f"'{parent_id}' in parents", "trashed = false"]
     if folders_only is True:
         parts.append(f"mimeType = '{_FOLDER_MIME}'")
@@ -77,21 +80,19 @@ def _list_children(parent_id: str, *, folders_only: bool | None = None) -> list[
     files: list[dict] = []
     page_token = None
     while True:
-        response = (
-            service.files()
-            .list(
-                q=query,
-                spaces="drive",
-                fields="nextPageToken, files(id, name, mimeType, size)",
-                pageToken=page_token,
-                pageSize=100,
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-            )
-            .execute()
-        )
-        files.extend(response.get("files", []))
-        page_token = response.get("nextPageToken")
+        params: dict[str, Any] = {
+            "q": query,
+            "spaces": "drive",
+            "fields": "nextPageToken, files(id, name, mimeType, size)",
+            "pageSize": 100,
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        payload = _drive_get("/files", params)
+        files.extend(payload.get("files") or [])
+        page_token = payload.get("nextPageToken")
         if not page_token:
             break
     return files
@@ -106,7 +107,6 @@ def find_child_folder(parent_id: str, name: str) -> str | None:
 
 
 def resolve_path(folder_names: list[str]) -> str | None:
-    """Résout une liste de noms depuis la racine NEEGY_STOCK."""
     if not is_drive_configured():
         return None
     current = config.google_drive_folder_id
@@ -172,68 +172,59 @@ def list_slot_files(folder_id: str, *, media_kind: str) -> list[DriveFile]:
 
 
 def download_file(file_id: str) -> bytes:
-    service = _drive_service()
-    if service is None:
+    session = _authorized_session()
+    if session is None:
         raise RuntimeError("Drive non configuré")
-    from googleapiclient.http import MediaIoBaseDownload
-
-    buffer = io.BytesIO()
-    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    downloader = MediaIoBaseDownload(buffer, request, chunksize=1024 * 1024)
-    done = False
-    while not done:
-        _status, done = downloader.next_chunk()
-    return buffer.getvalue()
+    url = f"{_DRIVE_API}/files/{file_id}"
+    response = session.get(
+        url,
+        params={"alt": "media", "supportsAllDrives": "true"},
+        timeout=60,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Téléchargement HTTP {response.status_code}: {response.text[:200]}")
+    return response.content
 
 
 def audit_structure() -> list[str]:
-    """Diagnostic rapide (peu d'appels API) pour /drive_check."""
-    lines: list[str] = []
+    """Diagnostic rapide avec timeouts HTTP stricts."""
     email = (config.google_service_account_info or {}).get("client_email", "?")
     if not config.google_drive_folder_id:
         return ["❌ GOOGLE_DRIVE_FOLDER_ID manquant"]
     if not config.google_service_account_info:
         return ["❌ GOOGLE_SERVICE_ACCOUNT_JSON manquant"]
 
+    lines = [f"Compte : {email}"]
+    folder_id = config.google_drive_folder_id
+    assert folder_id
+
     try:
-        service = _drive_service()
-        if service is None:
-            return ["❌ Impossible d'initialiser le client Drive"]
-        lines.append(f"Compte : {email}")
-        root = (
-            service.files()
-            .get(
-                fileId=config.google_drive_folder_id,
-                fields="id,name",
-                supportsAllDrives=True,
-            )
-            .execute()
+        root = _drive_get(
+            f"/files/{folder_id}",
+            {"fields": "id,name", "supportsAllDrives": "true"},
         )
         lines.append(f"✅ Racine : {root.get('name')}")
     except Exception as exc:
         logger.exception("Audit Drive racine")
         msg = str(exc)
         hint = (
-            "Partage le dossier avec le compte de service (Lecteur), "
-            "et active Google Drive API sur le projet Cloud."
+            "Partage le dossier avec le service account (Lecteur) "
+            "et active Google Drive API sur neegy-506816."
         )
-        if "HttpError 404" in msg or "notFound" in msg:
-            hint = "Dossier introuvable ou non partagé avec le service account."
-        elif "HttpError 403" in msg or "accessNotConfigured" in msg:
-            hint = "Active « Google Drive API » dans Google Cloud pour ce projet."
-        return [f"❌ Accès Drive refusé : {exc}", hint]
+        if "404" in msg:
+            hint = "Dossier introuvable ou non partagé avec neegs-965@…."
+        elif "403" in msg or "accessNotConfigured" in msg:
+            hint = "Active Google Drive API : console.cloud.google.com/apis/library/drive.googleapis.com"
+        return [f"❌ Accès Drive refusé ({exc})", hint]
 
-    # Un listage racine, puis descente limitée (pas de resolve_path répété).
     try:
-        top = _list_children(config.google_drive_folder_id, folders_only=True)
+        top = _list_children(folder_id, folders_only=True)
     except Exception as exc:
-        logger.exception("List racine Drive")
-        return lines + [f"❌ Impossible de lister la racine : {exc}"]
+        return lines + [f"❌ Listage racine impossible : {exc}"]
 
-    by_name = { (c.get("name") or "").strip().lower(): c for c in top }
+    by_name = {(c.get("name") or "").strip().lower(): c for c in top}
     lines.append(
-        "Dossiers racine : "
-        + (", ".join(sorted(by_name)) if by_name else "(vide)")
+        "Dossiers racine : " + (", ".join(sorted(by_name)) if by_name else "(vide)")
     )
 
     expected = {
