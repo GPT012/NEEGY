@@ -81,34 +81,61 @@ def _parse_google_service_account(raw: str | None) -> dict[str, Any] | None:
     """Parse le JSON du compte de service. Jamais bloquant : échec → Drive désactivé."""
     if not raw:
         return None
-    text = raw.strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
-        inner = text[1:-1].strip()
-        if inner.startswith("{"):
-            text = inner
     text = (
-        text.replace("\ufeff", "")
+        raw.strip()
+        .replace("\ufeff", "")
         .replace("\u201c", '"')
         .replace("\u201d", '"')
         .replace("\u2018", "'")
         .replace("\u2019", "'")
     )
+    # Collage fréquent : corps JSON sans { } autour.
+    if text.lstrip().startswith('"type"'):
+        body = text.strip().rstrip(",")
+        if not body.startswith("{"):
+            body = "{" + body
+        if not body.endswith("}"):
+            body = body + "}"
+        text = body
+    # JSON entier entre guillemets (rare).
+    if text.startswith('"{') and text.endswith('}"'):
+        try:
+            text = json.loads(text)
+            if isinstance(text, str):
+                pass  # decoded to inner JSON string — handled below
+            else:
+                text = raw  # unexpected
+        except Exception:
+            text = text[1:-1]
+
+    candidates: list[str] = []
+    if isinstance(text, str):
+        candidates.append(text.strip())
+        # Si toujours sans accolades après nettoyage.
+        t = text.strip()
+        if t.startswith('"type"') or (t.startswith('"') and '"type"' in t[:40]):
+            body = t.rstrip(",")
+            if not body.startswith("{"):
+                body = "{" + body
+            if not body.endswith("}"):
+                body = body + "}"
+            candidates.append(body)
 
     data: Any = None
     errors: list[str] = []
-    for candidate in (text,):
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
         try:
             if candidate.lstrip().startswith("{"):
                 data = json.loads(candidate)
                 break
             sample = "".join(candidate.split())
-            if sample and all(c.isalnum() or c in "+/=_-" for c in sample):
+            if len(sample) > 80 and all(c.isalnum() or c in "+/=_-" for c in sample):
                 padded = sample + ("=" * (-len(sample) % 4))
                 decoded = base64.b64decode(padded)
                 data = json.loads(decoded.decode("utf-8"))
                 break
-            data = json.loads(candidate)
-            break
         except Exception as exc:
             errors.append(type(exc).__name__)
             data = None
