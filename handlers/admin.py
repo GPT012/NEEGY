@@ -708,17 +708,16 @@ async def handle_admin_settings(
 
 @router.message(Command("drive_check"))
 async def handle_drive_check(message: Message) -> None:
+    from config import describe_drive_env
     from services.drive import audit_structure, is_drive_configured
 
     if not is_drive_configured():
+        diag = "\n".join(describe_drive_env())
         await message.answer(
             "Google Drive pas encore actif.\n\n"
-            "1. Google Cloud → crée un projet → active « Google Drive API »\n"
-            "2. Compte de service → clé JSON\n"
-            "3. Partage ton dossier NEEGY_STOCK avec l'email du compte (Lecteur)\n"
-            "4. Railway → variable GOOGLE_SERVICE_ACCOUNT_JSON = contenu du JSON\n"
-            "5. GOOGLE_DRIVE_FOLDER_ID est déjà prêt (ton dossier)\n\n"
-            "Puis /drive_check à nouveau."
+            f"{diag}\n\n"
+            "Rappel : partage le dossier Drive avec\n"
+            "neegs-965@neegy-506816.iam.gserviceaccount.com (Lecteur)."
         )
         return
     await message.answer("Vérification Drive…")

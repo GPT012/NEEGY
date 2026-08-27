@@ -82,11 +82,10 @@ def _parse_google_service_account(raw: str | None) -> dict[str, Any] | None:
     if not raw:
         return None
     text = raw.strip()
-    # Railway / copier-coller : guillemets autour, espaces insécables, etc.
-    if (text.startswith("'") and text.endswith("'")) or (
-        text.startswith('"') and text.endswith('"') and not text.startswith('"{')
-    ):
-        text = text[1:-1].strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        inner = text[1:-1].strip()
+        if inner.startswith("{"):
+            text = inner
     text = (
         text.replace("\ufeff", "")
         .replace("\u201c", '"')
@@ -96,29 +95,31 @@ def _parse_google_service_account(raw: str | None) -> dict[str, Any] | None:
     )
 
     data: Any = None
-    try:
-        if text.lstrip().startswith("{"):
-            data = json.loads(text)
-        else:
-            # Base64 uniquement si l'alphabet ressemble à du base64.
-            sample = "".join(text.split())
-            if sample and all(
-                c.isalnum() or c in "+/=_-" for c in sample
-            ):
+    errors: list[str] = []
+    for candidate in (text,):
+        try:
+            if candidate.lstrip().startswith("{"):
+                data = json.loads(candidate)
+                break
+            sample = "".join(candidate.split())
+            if sample and all(c.isalnum() or c in "+/=_-" for c in sample):
                 padded = sample + ("=" * (-len(sample) % 4))
                 decoded = base64.b64decode(padded)
                 data = json.loads(decoded.decode("utf-8"))
-            else:
-                data = json.loads(text)
-    except Exception as exc:
-        # Ne pas crasher le bot : sans JSON valide, on garde le stock Telegram.
+                break
+            data = json.loads(candidate)
+            break
+        except Exception as exc:
+            errors.append(type(exc).__name__)
+            data = None
+
+    if data is None:
         import logging
 
         logging.getLogger(__name__).error(
             "GOOGLE_SERVICE_ACCOUNT_JSON illisible (%s). "
-            "Colle le contenu BRUT du fichier .json (doit commencer par {). "
-            "Drive désactivé jusqu'à correction.",
-            type(exc).__name__,
+            "Astuce Mac : base64 -i ~/Downloads/ton-fichier.json | pbcopy",
+            ",".join(errors) or "vide",
         )
         return None
 
@@ -126,11 +127,33 @@ def _parse_google_service_account(raw: str | None) -> dict[str, Any] | None:
         import logging
 
         logging.getLogger(__name__).error(
-            "GOOGLE_SERVICE_ACCOUNT_JSON incomplet (client_email / private_key manquants). "
-            "Drive désactivé."
+            "GOOGLE_SERVICE_ACCOUNT_JSON incomplet (client_email / private_key manquants)."
         )
         return None
     return data
+
+
+def describe_drive_env() -> list[str]:
+    """Diagnostic sans secret pour /drive_check."""
+    lines: list[str] = []
+    raw = _get_str("GOOGLE_SERVICE_ACCOUNT_JSON")
+    folder = _get_str("GOOGLE_DRIVE_FOLDER_ID") or "1uzZ27BUbaAsl6Rz4E4oHWNmTqD57gE2l"
+    lines.append(f"Folder ID : ✅ {folder[:12]}…")
+    if not raw:
+        lines.append("JSON : ❌ variable absente ou vide sur ce service Railway")
+        lines.append("Méthode simple (Mac Terminal) :")
+        lines.append("base64 -i ~/Downloads/TON_FICHIER.json | pbcopy")
+        lines.append("Puis colle dans GOOGLE_SERVICE_ACCOUNT_JSON et redéploie.")
+        return lines
+    first = raw.lstrip()[:1]
+    lines.append(f"JSON : présente ({len(raw)} caractères), commence par {first!r}")
+    parsed = _parse_google_service_account(raw)
+    if parsed:
+        lines.append(f"✅ Compte reconnu : {parsed.get('client_email')}")
+    else:
+        lines.append("❌ Contenu illisible (JSON cassé au collage)")
+        lines.append("Efface la variable, encode en base64 (commande ci-dessus), recolle.")
+    return lines
 
 
 @dataclass(frozen=True)
