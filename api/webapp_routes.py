@@ -463,10 +463,8 @@ async def checkout(request: web.Request) -> web.Response:
         summary_lines.append(_format_item_line(item))
     if result.discount_percent:
         summary_lines.append(f"\nRéduction roue appliquée : -{result.discount_percent}%")
-    summary_lines.append(f"\nTotal : {result.total_cents / 100:.2f} {result.currency}")
     payment = _payment_payload(request)
     payment["reference"] = f"NEEGY-{result.order_id}"
-    summary_lines.extend(_payment_message_lines(payment))
 
     try:
         await bot.send_message(user_id, "\n".join(summary_lines))

@@ -253,21 +253,6 @@ async def deliver_drive_for_order(bot: Bot, pool: asyncpg.Pool, order_id: int) -
         msg = f"Slot Drive vide : {path}"
         return [msg, *detail], False
 
-    try:
-        await bot.send_message(user_id, f"📦 Voici ton contenu ({path}) :")
-    except TelegramForbiddenError:
-        return [
-            "La cliente n'a jamais ouvert le bot (@S94lmabot → /start). "
-            f"Demande-lui ça, puis /fulfill {order_id}"
-        ], False
-    except TelegramBadRequest as exc:
-        if _chat_unreachable(exc):
-            return [
-                "La cliente n'a jamais ouvert le bot (@S94lmabot → /start). "
-                f"Demande-lui ça, puis /fulfill {order_id}"
-            ], False
-        logger.exception("Annonce Drive user=%s", user_id)
-
     sent = 0
     for item in files:
         # Déjà livré ?

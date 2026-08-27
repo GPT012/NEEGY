@@ -121,32 +121,23 @@ async def deliver_fulfillment(
             "Stock vide ou aucun fichier attribué — remplis /depot puis /fulfill ID."
         )
 
-    if assets:
-        try:
-            await bot.send_message(user_id, "📦 Voici ton contenu :")
-        except TelegramForbiddenError as exc:
-            logger.exception("Cliente inaccessible user_id=%s", user_id)
-            send_errors.append(_friendly_send_error(exc))
-            return send_errors
-        except Exception:
-            logger.exception("Impossible d'annoncer le contenu à user_id=%s", user_id)
-
     delivered_ids: list[int] = []
-    for asset in assets:
-        try:
-            await _send_asset(bot, user_id, asset)
-            delivered_ids.append(asset.id)
-            await asyncio.sleep(0.08)
-        except TelegramForbiddenError as exc:
-            logger.exception("Cliente inaccessible user_id=%s asset=%s", user_id, asset.id)
-            send_errors.append(_friendly_send_error(exc, asset.id))
-            break
-        except TelegramBadRequest as exc:
-            logger.exception("Fichier Telegram refusé pour user_id=%s asset=%s", user_id, asset.id)
-            send_errors.append(_friendly_send_error(exc, asset.id))
-        except Exception as exc:
-            logger.exception("Impossible d'envoyer l'asset #%s à user_id=%s", asset.id, user_id)
-            send_errors.append(_friendly_send_error(exc, asset.id))
+    if assets:
+        for asset in assets:
+            try:
+                await _send_asset(bot, user_id, asset)
+                delivered_ids.append(asset.id)
+                await asyncio.sleep(0.08)
+            except TelegramForbiddenError as exc:
+                logger.exception("Cliente inaccessible user_id=%s asset=%s", user_id, asset.id)
+                send_errors.append(_friendly_send_error(exc, asset.id))
+                break
+            except TelegramBadRequest as exc:
+                logger.exception("Fichier Telegram refusé pour user_id=%s asset=%s", user_id, asset.id)
+                send_errors.append(_friendly_send_error(exc, asset.id))
+            except Exception as exc:
+                logger.exception("Impossible d'envoyer l'asset #%s à user_id=%s", asset.id, user_id)
+                send_errors.append(_friendly_send_error(exc, asset.id))
 
     if db_pool is not None and order_id is not None and delivered_ids:
         try:
