@@ -230,6 +230,16 @@ def describe_slot_folder(folder_id: str, media_kind: str, path_label: str) -> li
         kind = infer_kind(name, mime, media_kind)
         if kind == media_kind:
             lines.append(f"✅ {name}")
+        elif kind == "video" and media_kind == "photo":
+            lines.append(
+                f"⚠ vidéo dans un slot PHOTO : {name} — "
+                f"met-la dans videos/…/slot_XX, ou mets une .jpg/.png ici"
+            )
+        elif kind == "photo" and media_kind == "video":
+            lines.append(
+                f"⚠ photo dans un slot VIDÉO : {name} — "
+                f"met-la dans photos/…/slot_XX, ou mets une .mp4/.mov ici"
+            )
         else:
             lines.append(f"⚠ ignoré : {name} ({mime})")
     valid = _collect_slot_files(folder_id, media_kind)
