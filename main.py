@@ -58,7 +58,8 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="depot", description="Dépôt Drive photos/vidéos"),
     BotCommand(command="depot_stop", description="Fermer le dépôt"),
     BotCommand(command="drive_check", description="Vérifier Google Drive"),
-    BotCommand(command="drive_slot", description="Voir un slot Drive"),
+    BotCommand(command="slot", description="Voir un slot (ex: photo 5 1)"),
+    BotCommand(command="drive_slot", description="Alias de /slot"),
     BotCommand(command="stock", description="Remplir photos et vidéos"),
     BotCommand(command="grants", description="Qui a reçu quel lot"),
     BotCommand(command="rewards", description="Alias de /grants"),
@@ -108,10 +109,21 @@ async def _safe_close_session(bot: Bot) -> None:
         logger.exception("Erreur lors de la fermeture de la session du bot")
 
 
+async def _register_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(BOT_COMMANDS)
+    if config.admin_user_id:
+        await bot.set_my_commands(
+            ADMIN_BOT_COMMANDS,
+            scope=BotCommandScopeChat(chat_id=config.admin_user_id),
+        )
+    logger.info("Commandes Telegram enregistrées pour l'admin")
+
+
 async def run_polling() -> None:
     """Démarre le bot en mode polling (développement local)."""
     bot = create_bot()
     dispatcher = create_dispatcher()
+    dispatcher.startup.register(_register_bot_commands)
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
@@ -135,19 +147,15 @@ async def _on_startup(bot: Bot) -> None:
     )
     logger.info("Webhook configuré sur %s", config.webhook_url)
 
-    await bot.set_my_commands(BOT_COMMANDS)
-    if config.admin_user_id:
-        await bot.set_my_commands(
-            ADMIN_BOT_COMMANDS,
-            scope=BotCommandScopeChat(chat_id=config.admin_user_id),
+    await _register_bot_commands(bot)
+    if config.mini_app_url:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Boutique",
+                web_app=WebAppInfo(url=config.mini_app_url),
+            )
         )
-    await bot.set_chat_menu_button(
-        menu_button=MenuButtonWebApp(
-            text="Boutique",
-            web_app=WebAppInfo(url=config.mini_app_url),
-        )
-    )
-    logger.info("Commandes et bouton menu (Mini App) configurés")
+    logger.info("Bouton menu (Mini App) configuré")
 
 
 async def _on_app_startup(app: web.Application) -> None:

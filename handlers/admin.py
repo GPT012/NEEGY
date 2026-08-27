@@ -706,21 +706,34 @@ async def handle_admin_settings(
         await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
 
 
-@router.message(Command("drive_slot"))
+@router.message(Command("slot", "drive_slot"))
 async def handle_drive_slot(message: Message, command: CommandObject) -> None:
-    from services.drive import audit_slot_by_path, clear_drive_service_cache, is_drive_configured
+    from services.drive import (
+        audit_slot_by_path,
+        clear_drive_service_cache,
+        is_drive_configured,
+        parse_slot_args,
+    )
 
     if not is_drive_configured():
         await message.answer("Drive non configuré — voir /drive_check")
         return
-    args = (command.args or "").strip()
-    if not args:
-        await message.answer("Usage : /drive_slot photos/5/slot_01")
+    raw_args = (command.args or "").strip()
+    if not raw_args:
+        await message.answer(
+            "Vérifier un slot Drive (lu en direct, pas de sync) :\n\n"
+            "/slot photo 5 1\n"
+            "/slot video 10 1\n"
+            "ou /slot photos/5/slot_01\n\n"
+            "Seul /slot ou /drive_slot apparaît en bleu dans Telegram ; "
+            "le reste est à taper après un espace."
+        )
         return
+    slot_path = parse_slot_args(raw_args) or raw_args.replace(" ", "")
     clear_drive_service_cache()
     try:
         lines = await asyncio.wait_for(
-            asyncio.to_thread(audit_slot_by_path, args.replace(" ", "")),
+            asyncio.to_thread(audit_slot_by_path, slot_path),
             timeout=20,
         )
         await message.answer("\n".join(lines))

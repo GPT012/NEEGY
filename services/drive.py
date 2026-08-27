@@ -355,6 +355,35 @@ def audit_structure() -> list[str]:
     return lines
 
 
+def parse_slot_args(raw: str) -> str | None:
+    """Convertit vers photos/5/slot_01 depuis plusieurs formats admin."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    text = text.replace("\\", "/")
+    if "/" in text and " " not in text:
+        parts = [p.strip() for p in text.split("/") if p.strip()]
+        if len(parts) == 3:
+            return "/".join(parts)
+    parts = text.split()
+    if len(parts) == 3:
+        kind = parts[0].lower()
+        if kind.startswith("photo"):
+            media = "photo"
+        elif kind.startswith("vid"):
+            media = "video"
+        else:
+            return None
+        try:
+            price = int(parts[1])
+            slot_token = parts[2].lower().replace("slot_", "").replace("slot", "")
+            slot_n = int(slot_token) if slot_token else int(parts[2])
+        except ValueError:
+            return None
+        return slot_path(media, price, slot_n)
+    return None
+
+
 def audit_slot_by_path(slot_path: str) -> list[str]:
     """Diagnostic d'un slot précis, ex: photos/5/slot_01."""
     parts = [p.strip() for p in slot_path.replace("\\", "/").split("/") if p.strip()]
