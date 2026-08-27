@@ -706,6 +706,31 @@ async def handle_admin_settings(
         await callback.answer(GENERIC_ERROR_MESSAGE, show_alert=True)
 
 
+@router.message(Command("drive_slot"))
+async def handle_drive_slot(message: Message, command: CommandObject) -> None:
+    from services.drive import audit_slot_by_path, clear_drive_service_cache, is_drive_configured
+
+    if not is_drive_configured():
+        await message.answer("Drive non configuré — voir /drive_check")
+        return
+    args = (command.args or "").strip()
+    if not args:
+        await message.answer("Usage : /drive_slot photos/5/slot_01")
+        return
+    clear_drive_service_cache()
+    try:
+        lines = await asyncio.wait_for(
+            asyncio.to_thread(audit_slot_by_path, args.replace(" ", "")),
+            timeout=20,
+        )
+        await message.answer("\n".join(lines))
+    except asyncio.TimeoutError:
+        await message.answer("Timeout — réessaie.")
+    except Exception:
+        logger.exception("drive_slot")
+        await message.answer(GENERIC_ERROR_MESSAGE)
+
+
 @router.message(Command("drive_check"))
 async def handle_drive_check(message: Message) -> None:
     from config import describe_drive_env

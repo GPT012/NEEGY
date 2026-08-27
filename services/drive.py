@@ -17,8 +17,8 @@ _FOLDER_MIME = "application/vnd.google-apps.folder"
 _SLOT_RE = re.compile(r"^slot_(\d+)$", re.IGNORECASE)
 _HTTP_TIMEOUT = 12
 
-_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-_VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".bmp"}
+_VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 _DRIVE_API = "https://www.googleapis.com/drive/v3"
 
 
@@ -138,20 +138,37 @@ def resolve_slot_folder_id(media_kind: str, price_eur: int, slot_number: int) ->
 
 
 def infer_kind(file_name: str, mime_type: str, fallback: str) -> str:
-    mime = (mime_type or "").lower()
     name = (file_name or "").lower()
-    if mime.startswith("video/") or any(name.endswith(ext) for ext in _VIDEO_EXTS):
+    if any(name.endswith(ext) for ext in _VIDEO_EXTS):
         return "video"
-    if mime.startswith("image/") or any(name.endswith(ext) for ext in _IMAGE_EXTS):
+    if any(name.endswith(ext) for ext in _IMAGE_EXTS):
+        return "photo"
+    mime = (mime_type or "").lower()
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("image/"):
         return "photo"
     return fallback
 
 
-def list_slot_files(folder_id: str, *, media_kind: str) -> list[DriveFile]:
+def _collect_slot_files(
+    folder_id: str,
+    media_kind: str,
+    *,
+    depth: int = 0,
+    max_depth: int = 2,
+) -> list[DriveFile]:
+    """Fichiers dans le slot (+ sous-dossiers sur 2 niveaux si besoin)."""
     items: list[DriveFile] = []
     for raw in _list_children(folder_id, folders_only=False):
         mime = raw.get("mimeType") or ""
         if mime == _FOLDER_MIME:
+            if depth < max_depth:
+                items.extend(
+                    _collect_slot_files(
+                        raw["id"], media_kind, depth=depth + 1, max_depth=max_depth
+                    )
+                )
             continue
         if mime.startswith("application/vnd.google-apps."):
             continue
@@ -169,6 +186,39 @@ def list_slot_files(folder_id: str, *, media_kind: str) -> list[DriveFile]:
         )
     items.sort(key=lambda f: f.name.lower())
     return items
+
+
+def describe_slot_folder(folder_id: str, media_kind: str, path_label: str) -> list[str]:
+    """Explique ce que Drive voit quand le slot semble vide."""
+    lines = [f"Contenu brut de {path_label} :"]
+    try:
+        children = _list_children(folder_id, folders_only=False)
+    except Exception as exc:
+        return [f"Impossible de lister : {exc}"]
+    if not children:
+        lines.append("→ vide (0 élément). Ajoute des fichiers DANS slot_01, pas à côté.")
+        return lines
+    for raw in children:
+        name = raw.get("name") or "?"
+        mime = raw.get("mimeType") or "?"
+        if mime == _FOLDER_MIME:
+            sub_files = _collect_slot_files(raw["id"], media_kind, depth=0, max_depth=1)
+            lines.append(
+                f"📁 {name}/ — {len(sub_files)} fichier(s) photo/vidéo valide(s) dedans"
+            )
+            continue
+        kind = infer_kind(name, mime, media_kind)
+        if kind == media_kind:
+            lines.append(f"✅ {name}")
+        else:
+            lines.append(f"⚠ ignoré : {name} ({mime})")
+    valid = _collect_slot_files(folder_id, media_kind)
+    lines.append(f"→ {len(valid)} fichier(s) envoyable(s) au total.")
+    return lines
+
+
+def list_slot_files(folder_id: str, *, media_kind: str) -> list[DriveFile]:
+    return _collect_slot_files(folder_id, media_kind)
 
 
 def download_file(file_id: str) -> bytes:
@@ -282,4 +332,30 @@ def audit_structure() -> list[str]:
                     f"  ✅ {root_name}/{price}/ slots 01…{last:02d} "
                     f"(slot_01 : {len(files)} fichier(s))"
                 )
+    return lines
+
+
+def audit_slot_by_path(slot_path: str) -> list[str]:
+    """Diagnostic d'un slot précis, ex: photos/5/slot_01."""
+    parts = [p.strip() for p in slot_path.replace("\\", "/").split("/") if p.strip()]
+    if len(parts) != 3:
+        return [
+            "Format : photos/5/slot_01 ou videos/10/slot_02",
+            "Ex: /drive_slot photos/5/slot_01",
+        ]
+    root_name = parts[0]
+    if root_name not in ("photos", "videos"):
+        return ["Le 1er segment doit être photos ou videos."]
+    media_kind = "photo" if root_name == "photos" else "video"
+    folder_id = resolve_path(parts)
+    if folder_id is None:
+        return [f"❌ Dossier introuvable : {slot_path}"]
+    lines = [f"📂 {slot_path}"]
+    files = list_slot_files(folder_id, media_kind=media_kind)
+    if files:
+        for f in files:
+            lines.append(f"  ✅ {f.name}")
+        lines.append(f"→ {len(files)} fichier(s) prêt(s) à envoyer.")
+    else:
+        lines.extend(describe_slot_folder(folder_id, media_kind, slot_path))
     return lines

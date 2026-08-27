@@ -236,7 +236,11 @@ async def deliver_drive_for_order(bot: Bot, pool: asyncpg.Pool, order_id: int) -
         return [f"Impossible de lister {path} : {exc}"], False
 
     if not files:
-        return [f"Slot Drive vide : {path}"], False
+        detail = await asyncio.to_thread(
+            drive_client.describe_slot_folder, folder_id, media_kind, path
+        )
+        msg = f"Slot Drive vide : {path}"
+        return [msg, *detail], False
 
     try:
         await bot.send_message(user_id, f"📦 Voici ton contenu ({path}) :")
