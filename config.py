@@ -78,23 +78,58 @@ def _get_required_int(name: str) -> int:
 
 
 def _parse_google_service_account(raw: str | None) -> dict[str, Any] | None:
+    """Parse le JSON du compte de service. Jamais bloquant : échec → Drive désactivé."""
     if not raw:
         return None
     text = raw.strip()
+    # Railway / copier-coller : guillemets autour, espaces insécables, etc.
+    if (text.startswith("'") and text.endswith("'")) or (
+        text.startswith('"') and text.endswith('"') and not text.startswith('"{')
+    ):
+        text = text[1:-1].strip()
+    text = (
+        text.replace("\ufeff", "")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+
+    data: Any = None
     try:
-        if text.startswith("{"):
+        if text.lstrip().startswith("{"):
             data = json.loads(text)
         else:
-            data = json.loads(base64.b64decode(text).decode("utf-8"))
+            # Base64 uniquement si l'alphabet ressemble à du base64.
+            sample = "".join(text.split())
+            if sample and all(
+                c.isalnum() or c in "+/=_-" for c in sample
+            ):
+                padded = sample + ("=" * (-len(sample) % 4))
+                decoded = base64.b64decode(padded)
+                data = json.loads(decoded.decode("utf-8"))
+            else:
+                data = json.loads(text)
     except Exception as exc:
-        raise ConfigError(
-            "GOOGLE_SERVICE_ACCOUNT_JSON doit être le JSON du compte de service "
-            "(brut ou en base64)."
-        ) from exc
-    if not isinstance(data, dict) or "client_email" not in data or "private_key" not in data:
-        raise ConfigError(
-            "GOOGLE_SERVICE_ACCOUNT_JSON invalide (client_email / private_key manquants)."
+        # Ne pas crasher le bot : sans JSON valide, on garde le stock Telegram.
+        import logging
+
+        logging.getLogger(__name__).error(
+            "GOOGLE_SERVICE_ACCOUNT_JSON illisible (%s). "
+            "Colle le contenu BRUT du fichier .json (doit commencer par {). "
+            "Drive désactivé jusqu'à correction.",
+            type(exc).__name__,
         )
+        return None
+
+    if not isinstance(data, dict) or "client_email" not in data or "private_key" not in data:
+        import logging
+
+        logging.getLogger(__name__).error(
+            "GOOGLE_SERVICE_ACCOUNT_JSON incomplet (client_email / private_key manquants). "
+            "Drive désactivé."
+        )
+        return None
     return data
 
 
