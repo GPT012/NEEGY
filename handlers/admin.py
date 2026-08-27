@@ -709,7 +709,7 @@ async def handle_admin_settings(
 @router.message(Command("drive_check"))
 async def handle_drive_check(message: Message) -> None:
     from config import describe_drive_env
-    from services.drive import audit_structure, is_drive_configured
+    from services.drive import audit_structure, clear_drive_service_cache, is_drive_configured
 
     if not is_drive_configured():
         diag = "\n".join(describe_drive_env())
@@ -720,9 +720,19 @@ async def handle_drive_check(message: Message) -> None:
             "neegs-965@neegy-506816.iam.gserviceaccount.com (Lecteur)."
         )
         return
-    await message.answer("Vérification Drive…")
+    await message.answer("Vérification Drive (max ~25s)…")
+    clear_drive_service_cache()
     try:
-        lines = await asyncio.to_thread(audit_structure)
+        lines = await asyncio.wait_for(asyncio.to_thread(audit_structure), timeout=25)
+    except asyncio.TimeoutError:
+        await message.answer(
+            "⏱ Drive ne répond pas à temps.\n"
+            "Vérifie :\n"
+            "• Google Drive API activée sur le projet neegy-506816\n"
+            "• Dossier partagé avec neegs-965@neegy-506816.iam.gserviceaccount.com (Lecteur)\n"
+            "Puis /drive_check à nouveau."
+        )
+        return
     except Exception:
         logger.exception("drive_check")
         await message.answer(GENERIC_ERROR_MESSAGE)

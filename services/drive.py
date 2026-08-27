@@ -14,6 +14,7 @@ logger = get_logger(__name__)
 
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 _SLOT_RE = re.compile(r"^slot_(\d+)$", re.IGNORECASE)
+_HTTP_TIMEOUT_SECONDS = 20
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
@@ -36,10 +37,14 @@ def _drive_service():
     if not is_drive_configured():
         return None
     try:
+        import google_auth_httplib2
+        import httplib2
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
     except ImportError:
-        logger.error("Paquets Google absents — ajoute google-api-python-client et google-auth")
+        logger.error(
+            "Paquets Google absents — google-api-python-client / google-auth / httplib2"
+        )
         return None
 
     info = config.google_service_account_info
@@ -48,7 +53,11 @@ def _drive_service():
         info,
         scopes=["https://www.googleapis.com/auth/drive.readonly"],
     )
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    # Timeout obligatoire : sinon un accès Drive bloqué fait "mouliner" Telegram.
+    http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=_HTTP_TIMEOUT_SECONDS)
+    )
+    return build("drive", "v3", http=http, cache_discovery=False)
 
 
 def clear_drive_service_cache() -> None:
@@ -145,12 +154,10 @@ def list_slot_files(folder_id: str, *, media_kind: str) -> list[DriveFile]:
         if mime == _FOLDER_MIME:
             continue
         if mime.startswith("application/vnd.google-apps."):
-            # Docs Google natifs non envoyables tels quels.
             continue
         name = raw.get("name") or "fichier"
         kind = infer_kind(name, mime, media_kind)
         if kind != media_kind:
-            # Ignore un jpg dans un slot vidéo, etc.
             continue
         items.append(
             DriveFile(
@@ -180,65 +187,108 @@ def download_file(file_id: str) -> bytes:
 
 
 def audit_structure() -> list[str]:
-    """Retourne des lignes de diagnostic pour /drive_check."""
+    """Diagnostic rapide (peu d'appels API) pour /drive_check."""
     lines: list[str] = []
+    email = (config.google_service_account_info or {}).get("client_email", "?")
     if not config.google_drive_folder_id:
         return ["❌ GOOGLE_DRIVE_FOLDER_ID manquant"]
     if not config.google_service_account_info:
-        return [
-            "❌ GOOGLE_SERVICE_ACCOUNT_JSON manquant",
-            "Crée un compte de service Google Cloud, active Drive API,",
-            "puis partage NEEGY_STOCK avec l'email du compte (Lecteur).",
-        ]
+        return ["❌ GOOGLE_SERVICE_ACCOUNT_JSON manquant"]
+
     try:
         service = _drive_service()
         if service is None:
             return ["❌ Impossible d'initialiser le client Drive"]
-        root = service.files().get(
-            fileId=config.google_drive_folder_id,
-            fields="id,name",
-            supportsAllDrives=True,
-        ).execute()
-        lines.append(f"✅ Racine : {root.get('name')} ({root.get('id')})")
+        lines.append(f"Compte : {email}")
+        root = (
+            service.files()
+            .get(
+                fileId=config.google_drive_folder_id,
+                fields="id,name",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+        lines.append(f"✅ Racine : {root.get('name')}")
     except Exception as exc:
         logger.exception("Audit Drive racine")
-        return [
-            f"❌ Accès racine refusé : {exc}",
-            "Vérifie que le dossier est partagé avec l'email du service account.",
-        ]
+        msg = str(exc)
+        hint = (
+            "Partage le dossier avec le compte de service (Lecteur), "
+            "et active Google Drive API sur le projet Cloud."
+        )
+        if "HttpError 404" in msg or "notFound" in msg:
+            hint = "Dossier introuvable ou non partagé avec le service account."
+        elif "HttpError 403" in msg or "accessNotConfigured" in msg:
+            hint = "Active « Google Drive API » dans Google Cloud pour ce projet."
+        return [f"❌ Accès Drive refusé : {exc}", hint]
+
+    # Un listage racine, puis descente limitée (pas de resolve_path répété).
+    try:
+        top = _list_children(config.google_drive_folder_id, folders_only=True)
+    except Exception as exc:
+        logger.exception("List racine Drive")
+        return lines + [f"❌ Impossible de lister la racine : {exc}"]
+
+    by_name = { (c.get("name") or "").strip().lower(): c for c in top }
+    lines.append(
+        "Dossiers racine : "
+        + (", ".join(sorted(by_name)) if by_name else "(vide)")
+    )
 
     expected = {
         "photos": (5, 10, 20),
         "videos": (10, 20, 30),
     }
     for root_name, prices in expected.items():
-        root_id = find_child_folder(config.google_drive_folder_id, root_name)
-        if root_id is None:
-            lines.append(f"❌ Dossier manquant : {root_name}/")
+        node = by_name.get(root_name)
+        if node is None:
+            lines.append(f"❌ Manquant : {root_name}/")
             continue
         lines.append(f"✅ {root_name}/")
+        try:
+            price_folders = {
+                (c.get("name") or "").strip(): c
+                for c in _list_children(node["id"], folders_only=True)
+            }
+        except Exception as exc:
+            lines.append(f"  ❌ lecture {root_name}/ : {exc}")
+            continue
+        kind = "photo" if root_name == "photos" else "video"
         for price in prices:
-            price_id = find_child_folder(root_id, str(price))
-            if price_id is None:
+            price_node = price_folders.get(str(price))
+            if price_node is None:
                 lines.append(f"  ❌ {root_name}/{price}/ manquant")
                 continue
-            slots = []
-            for child in _list_children(price_id, folders_only=True):
+            try:
+                slot_children = _list_children(price_node["id"], folders_only=True)
+            except Exception as exc:
+                lines.append(f"  ❌ {root_name}/{price}/ : {exc}")
+                continue
+            slots: list[int] = []
+            slot01_id = None
+            for child in slot_children:
                 match = _SLOT_RE.match((child.get("name") or "").strip())
                 if match:
-                    slots.append(int(match.group(1)))
+                    n = int(match.group(1))
+                    slots.append(n)
+                    if n == 1:
+                        slot01_id = child["id"]
             slots.sort()
-            if 1 not in slots:
+            if not slot01_id:
                 lines.append(f"  ❌ {root_name}/{price}/slot_01 manquant")
                 continue
-            slot01 = resolve_path([root_name, str(price), "slot_01"])
-            kind = "photo" if root_name == "photos" else "video"
-            files = list_slot_files(slot01, media_kind=kind) if slot01 else []
+            try:
+                files = list_slot_files(slot01_id, media_kind=kind)
+            except Exception as exc:
+                lines.append(f"  ❌ slot_01 {root_name}/{price} : {exc}")
+                continue
             if not files:
-                lines.append(f"  ⚠ {root_name}/{price}/slot_01 vide (0 fichier {kind})")
+                lines.append(f"  ⚠ {root_name}/{price}/slot_01 vide")
             else:
+                last = slots[-1] if slots else 1
                 lines.append(
-                    f"  ✅ {root_name}/{price}/ — slots {slots[0]:02d}…{slots[-1]:02d} "
+                    f"  ✅ {root_name}/{price}/ slots 01…{last:02d} "
                     f"(slot_01 : {len(files)} fichier(s))"
                 )
     return lines
