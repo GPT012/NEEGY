@@ -125,6 +125,12 @@ def _extract_telegram_file_id(message, kind: str) -> str | None:
     return None
 
 
+def _chat_unreachable(exc: BaseException) -> bool:
+    if isinstance(exc, TelegramForbiddenError):
+        return True
+    return "chat not found" in str(exc).lower()
+
+
 async def _send_drive_bytes(
     bot: Bot,
     user_id: int,
@@ -169,7 +175,11 @@ async def _send_drive_bytes(
                 raise
         except TelegramForbiddenError:
             raise
-    raise RuntimeError("Envoi Drive abandonné (flood)")
+        except TelegramBadRequest as exc:
+            if _chat_unreachable(exc):
+                raise TelegramForbiddenError(method="send", message=str(exc)) from exc
+            if attempt == 4:
+                raise
 
 
 async def _send_cached(
@@ -244,12 +254,17 @@ async def deliver_drive_for_order(bot: Bot, pool: asyncpg.Pool, order_id: int) -
 
     try:
         await bot.send_message(user_id, f"📦 Voici ton contenu ({path}) :")
-    except TelegramForbiddenError as exc:
+    except TelegramForbiddenError:
         return [
-            "Cliente inaccessible (pas de /start ou bot bloqué). "
-            f"Après /start → /fulfill {order_id}"
+            "La cliente n'a jamais ouvert le bot (@S94lmabot → /start). "
+            f"Demande-lui ça, puis /fulfill {order_id}"
         ], False
-    except Exception:
+    except TelegramBadRequest as exc:
+        if _chat_unreachable(exc):
+            return [
+                "La cliente n'a jamais ouvert le bot (@S94lmabot → /start). "
+                f"Demande-lui ça, puis /fulfill {order_id}"
+            ], False
         logger.exception("Annonce Drive user=%s", user_id)
 
     sent = 0
