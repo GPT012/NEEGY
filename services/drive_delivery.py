@@ -180,6 +180,7 @@ async def _send_drive_bytes(
                 raise TelegramForbiddenError(method="send", message=str(exc)) from exc
             if attempt == 4:
                 raise
+    raise RuntimeError("Envoi Drive abandonné (flood)")
 
 
 async def _send_cached(
