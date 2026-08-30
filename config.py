@@ -388,3 +388,21 @@ def load_config() -> Config:
 
 
 config = load_config()
+
+
+def public_inbox_url() -> str:
+    """URL publique de l'inbox chatteurs (MINI_APP_URL ou WEBHOOK_URL)."""
+    if config.mini_app_url:
+        url = config.mini_app_url.rstrip("/")
+        if url.endswith("/webapp"):
+            return f"{url[: -len('/webapp')]}/inbox/"
+        return f"{url}/inbox/"
+    if config.webhook_url:
+        base = config.webhook_url.rstrip("/")
+        path = (config.webhook_path or "/webhook").rstrip("/")
+        if path and base.endswith(path):
+            root = base[: -len(path)]
+        else:
+            root = base.rsplit("/", 1)[0]
+        return f"{root.rstrip('/')}/inbox/"
+    return "/inbox/"

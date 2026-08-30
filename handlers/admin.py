@@ -21,7 +21,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from config import config
+from config import config, public_inbox_url
 from db.inbox_repository import create_chat_agent, list_chat_agents, revoke_chat_agent
 from db.repository import (
     CartError,
@@ -1268,7 +1268,7 @@ async def handle_agent_add(message: Message, command: CommandObject, db_pool: as
         f"✅ Chatteur « {escape(agent.name)} » créé.\n\n"
         f"Identifiant : {escape(agent.name)}\n"
         f"Token (à copier une seule fois) :\n<code>{escape(token)}</code>\n\n"
-        "Connexion inbox : https://TON-DOMAINE/inbox/\n"
+        f"Connexion inbox : {public_inbox_url()}\n"
         "Ne partage pas ce token publiquement."
     )
 
