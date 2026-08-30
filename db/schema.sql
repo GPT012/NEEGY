@@ -353,6 +353,14 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation
     ON chat_messages (conversation_id, created_at);
 
+-- Identifiant Telegram du message (déduplication des échos business).
+ALTER TABLE chat_messages
+    ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_messages_tg_msg
+    ON chat_messages (conversation_id, telegram_message_id)
+    WHERE telegram_message_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS chat_canned_responses (
     id          SERIAL PRIMARY KEY,
     shortcut    TEXT NOT NULL UNIQUE,

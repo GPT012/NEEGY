@@ -12,7 +12,7 @@ from config import config, public_inbox_url
 from db.inbox_repository import (
     create_chat_agent,
     list_chat_agents,
-    record_incoming_business_message,
+    record_business_event,
     revoke_chat_agent,
 )
 from services.business_bot import extract_message_content, send_bot_message
@@ -40,28 +40,35 @@ def _client_label(user: dict[str, Any]) -> tuple[str, str | None]:
 
 
 async def _handle_business_message(pool, message: dict[str, Any]) -> None:
-    user = message.get("from") or {}
     chat = message.get("chat") or {}
-    telegram_user_id = user.get("id")
+    from_user = message.get("from") or {}
     telegram_chat_id = chat.get("id")
-    if telegram_user_id is None or telegram_chat_id is None:
+    if telegram_chat_id is None:
         return
 
     content = extract_message_content(message)
     if not content:
         return
 
-    connection_id = str(message.get("business_connection_id") or "")
-    client_name, client_username = _client_label(user)
+    # Dans un chat privé Business, l'interlocutrice est toujours `chat`.
+    # Si l'émetteur diffère du chat, c'est le compte perso qui a écrit (sortant).
+    from_id = from_user.get("id")
+    is_outgoing = from_id is not None and from_id != telegram_chat_id
+    direction = "out" if is_outgoing else "in"
 
-    await record_incoming_business_message(
+    connection_id = str(message.get("business_connection_id") or "")
+    client_name, client_username = _client_label(chat)
+
+    await record_business_event(
         pool,
-        telegram_user_id=int(telegram_user_id),
+        telegram_user_id=int(telegram_chat_id),
         telegram_chat_id=int(telegram_chat_id),
         business_connection_id=connection_id,
         client_name=client_name,
         client_username=client_username,
+        direction=direction,
         content=content,
+        telegram_message_id=message.get("message_id"),
     )
 
 

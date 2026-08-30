@@ -180,7 +180,7 @@ async def inbox_reply(request: web.Request) -> web.Response:
         connection_id = request.app.get("business_connection_id") or ""
 
     try:
-        await send_business_reply(
+        sent_message_id = await send_business_reply(
             chat_id=conversation.telegram_chat_id,
             text=content,
             business_connection_id=connection_id,
@@ -194,6 +194,7 @@ async def inbox_reply(request: web.Request) -> web.Response:
         conversation_id=conversation_id,
         agent_id=agent.id,
         content=content,
+        telegram_message_id=sent_message_id,
     )
     return _json({"ok": True})
 

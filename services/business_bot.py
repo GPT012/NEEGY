@@ -78,10 +78,10 @@ async def send_business_reply(
     chat_id: int,
     text: str,
     business_connection_id: str,
-) -> None:
+) -> int | None:
     if not business_connection_id:
         raise BusinessBotError("business_connection_id manquant pour cette conversation")
-    await _api(
+    body = await _api(
         "sendMessage",
         {
             "chat_id": chat_id,
@@ -89,6 +89,9 @@ async def send_business_reply(
             "business_connection_id": business_connection_id,
         },
     )
+    result = body.get("result") or {}
+    message_id = result.get("message_id")
+    return int(message_id) if message_id is not None else None
 
 
 def extract_message_content(message: dict[str, Any]) -> str:

@@ -151,7 +151,7 @@ async def get_agent_by_token(pool: asyncpg.Pool, token: str) -> ChatAgent | None
     )
 
 
-async def record_incoming_business_message(
+async def record_business_event(
     pool: asyncpg.Pool,
     *,
     telegram_user_id: int,
@@ -159,8 +159,15 @@ async def record_incoming_business_message(
     business_connection_id: str,
     client_name: str,
     client_username: str | None,
+    direction: str,
     content: str,
+    telegram_message_id: int | None = None,
 ) -> int:
+    """Enregistre un message business (entrant client OU sortant compte perso).
+
+    Déduplique via telegram_message_id pour éviter le double affichage quand
+    Telegram renvoie en écho un message déjà envoyé par le bot relais.
+    """
     async with pool.acquire() as connection:
         async with connection.transaction():
             conv_id = await connection.fetchval(
@@ -190,11 +197,15 @@ async def record_incoming_business_message(
             )
             await connection.execute(
                 """
-                INSERT INTO chat_messages (conversation_id, direction, content)
-                VALUES ($1, 'in', $2)
+                INSERT INTO chat_messages
+                    (conversation_id, direction, content, telegram_message_id)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT DO NOTHING
                 """,
                 conv_id,
+                direction,
                 content,
+                telegram_message_id,
             )
             return int(conv_id)
 
@@ -295,17 +306,21 @@ async def record_outgoing_message(
     conversation_id: int,
     agent_id: int,
     content: str,
+    telegram_message_id: int | None = None,
 ) -> None:
     async with pool.acquire() as connection:
         async with connection.transaction():
             await connection.execute(
                 """
-                INSERT INTO chat_messages (conversation_id, direction, content, agent_id)
-                VALUES ($1, 'out', $2, $3)
+                INSERT INTO chat_messages
+                    (conversation_id, direction, content, agent_id, telegram_message_id)
+                VALUES ($1, 'out', $2, $3, $4)
+                ON CONFLICT DO NOTHING
                 """,
                 conversation_id,
                 content,
                 agent_id,
+                telegram_message_id,
             )
             await connection.execute(
                 """
