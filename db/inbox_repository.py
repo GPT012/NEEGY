@@ -341,3 +341,41 @@ async def list_canned_responses(pool: asyncpg.Pool) -> list[CannedResponse]:
         """
     )
     return [CannedResponse(shortcut=row["shortcut"], content=row["content"]) for row in rows]
+
+
+async def get_canned_by_shortcut(pool: asyncpg.Pool, shortcut: str) -> CannedResponse | None:
+    row = await pool.fetchrow(
+        """
+        SELECT shortcut, content FROM chat_canned_responses
+        WHERE lower(shortcut) = lower($1) AND is_active = TRUE
+        """,
+        shortcut.strip(),
+    )
+    if row is None:
+        return None
+    return CannedResponse(shortcut=row["shortcut"], content=row["content"])
+
+
+async def upsert_canned_response(pool: asyncpg.Pool, shortcut: str, content: str) -> None:
+    await pool.execute(
+        """
+        INSERT INTO chat_canned_responses (shortcut, content, is_active)
+        VALUES ($1, $2, TRUE)
+        ON CONFLICT (shortcut) DO UPDATE SET
+            content = EXCLUDED.content,
+            is_active = TRUE
+        """,
+        shortcut.strip().lower(),
+        content.strip(),
+    )
+
+
+async def delete_canned_response(pool: asyncpg.Pool, shortcut: str) -> bool:
+    result = await pool.execute(
+        """
+        UPDATE chat_canned_responses SET is_active = FALSE
+        WHERE lower(shortcut) = lower($1) AND is_active = TRUE
+        """,
+        shortcut.strip(),
+    )
+    return result.endswith(" 1")

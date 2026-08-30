@@ -370,8 +370,19 @@ CREATE TABLE IF NOT EXISTS chat_canned_responses (
 
 INSERT INTO chat_canned_responses (shortcut, content)
 VALUES
-    ('boutique', 'Voici la boutique pour commander : {shop_link}'),
-    ('paypal', 'Tu peux payer via PayPal : {paypal_url}'),
-    ('prix', 'Dis-moi ce qui t''intéresse et je t''envoie les tarifs 😊')
+    ('salut', 'Salut bb 💋 contente que tu m''écrives ! Dis-moi ce qui te ferait plaisir 😊'),
+    ('boutique', 'Voici la boutique pour commander directement : {shop_link}'),
+    ('commande', 'Pour commander c''est simple : {shop_link} — tu choisis, tu paies, et tu reçois en privé ✨'),
+    ('paypal', 'Tu peux payer ici en PayPal : {paypal_url}'),
+    ('virement', 'Virement bancaire :\nTitulaire : {bank_holder}\nIBAN : {bank_iban}'),
+    ('crypto', 'Paiement crypto :\nSOL : {crypto_solana}\nETH : {crypto_ethereum}\nBTC : {crypto_bitcoin}'),
+    ('prix', 'Photos à partir de 5€, vidéos à partir de 10€, appels dispo aussi 📸 Dis-moi ce que tu veux !'),
+    ('photos', 'Photos exclusives : 5€ / 10€ / 20€ — tu choisis le pack et je t''envoie dès paiement reçu 📷'),
+    ('videos', 'Vidéos exclusives : 10€ / 20€ / 30€ — dis-moi laquelle t''intéresse 🎬'),
+    ('appel', 'Appels vidéo/audio dispo : 15 min (70€) ou 30 min (120€) — tu veux quelle durée ? 📞'),
+    ('relance', 'Hey bb tu es toujours là ? 😊 J''ai des nouveautés si tu veux voir…'),
+    ('dispo', 'Oui je suis dispo là ! Dis-moi ce qui t''intéresse 💋'),
+    ('merci', 'Merci bb 🙏 Dès que le paiement est reçu j''envoie tout de suite !'),
+    ('attente', 'Pas de souci bb, prends ton temps 😊 Je suis là quand tu veux !')
 ON CONFLICT (shortcut) DO NOTHING;
 

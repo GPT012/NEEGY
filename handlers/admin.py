@@ -22,7 +22,14 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from config import config, public_inbox_url
-from db.inbox_repository import create_chat_agent, list_chat_agents, revoke_chat_agent
+from db.inbox_repository import (
+    create_chat_agent,
+    delete_canned_response,
+    list_chat_agents,
+    list_canned_responses,
+    revoke_chat_agent,
+    upsert_canned_response,
+)
 from db.repository import (
     CartError,
     REWARD_POOL_LABELS,
@@ -1303,3 +1310,72 @@ async def handle_agent_revoke(message: Message, command: CommandObject, db_pool:
         await message.answer(f"🚫 Accès inbox révoqué pour « {escape(name)} ».")
     else:
         await message.answer(f"Aucun chatteur actif nommé « {escape(name)} ».")
+
+
+def _parse_canned_args(raw: str) -> tuple[str, str] | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if " | " in text:
+        shortcut, content = text.split(" | ", 1)
+        shortcut, content = shortcut.strip(), content.strip()
+        return (shortcut, content) if shortcut and content else None
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
+        return None
+    return parts[0].strip(), parts[1].strip()
+
+
+@router.message(Command("canned_add"))
+async def handle_canned_add(message: Message, command: CommandObject, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible.")
+        return
+    parsed = _parse_canned_args(command.args or "")
+    if not parsed:
+        await message.answer(
+            "Usage : /canned_add raccourci Message\n"
+            "Exemple : /canned_add relance Hey bb, tu es toujours là ?\n"
+            "Ou : /canned_add promo | Offre spéciale ce soir 🔥"
+        )
+        return
+    shortcut, content = parsed
+    await upsert_canned_response(db_pool, shortcut, content)
+    await message.answer(
+        f"✅ Commande /{escape(shortcut.lower())} enregistrée.\n\n"
+        f"Les chatteurs peuvent taper /{escape(shortcut.lower())} dans l'inbox."
+    )
+
+
+@router.message(Command("canned_list"))
+async def handle_canned_list(message: Message, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible.")
+        return
+    items = await list_canned_responses(db_pool)
+    if not items:
+        await message.answer("Aucune commande. Ajoute-en avec /canned_add")
+        return
+    lines = ["Commandes inbox disponibles :\n"]
+    for item in items:
+        preview = item.content.replace("\n", " ")
+        if len(preview) > 60:
+            preview = preview[:57] + "…"
+        lines.append(f"/{escape(item.shortcut)} — {escape(preview)}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("canned_del"))
+async def handle_canned_del(message: Message, command: CommandObject, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible.")
+        return
+    shortcut = (command.args or "").strip()
+    if not shortcut:
+        await message.answer("Usage : /canned_del raccourci\nExemple : /canned_del relance")
+        return
+    deleted = await delete_canned_response(db_pool, shortcut)
+    if deleted:
+        await message.answer(f"🗑 Commande /{escape(shortcut.lower())} supprimée.")
+    else:
+        await message.answer(f"Aucune commande active /{escape(shortcut.lower())}.")

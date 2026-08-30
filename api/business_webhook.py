@@ -11,9 +11,12 @@ from aiohttp import web
 from config import config, public_inbox_url
 from db.inbox_repository import (
     create_chat_agent,
+    delete_canned_response,
     list_chat_agents,
+    list_canned_responses,
     record_business_event,
     revoke_chat_agent,
+    upsert_canned_response,
 )
 from services.business_bot import extract_message_content, send_bot_message
 from utils.logger import get_logger
@@ -111,7 +114,11 @@ async def _handle_relay_private_message(
                 "Gestion chatteurs (admin) :\n"
                 "/agent_add Prénom — créer un accès\n"
                 "/agents — lister\n"
-                "/agent_revoke Prénom — révoquer"
+                "/agent_revoke Prénom — révoquer\n\n"
+                "Commandes chatteurs :\n"
+                "/canned_add raccourci Message\n"
+                "/canned_list — lister\n"
+                "/canned_del raccourci"
             ),
         )
         return
@@ -172,6 +179,52 @@ async def _handle_relay_private_message(
                 chat_id=chat_id,
                 text=f"Aucun chatteur actif « {args} ».",
             )
+        return
+
+    if command == "/canned_add":
+        if " | " in args:
+            shortcut, content = [p.strip() for p in args.split(" | ", 1)]
+        else:
+            parts = args.split(maxsplit=1)
+            shortcut = parts[0].strip() if parts else ""
+            content = parts[1].strip() if len(parts) > 1 else ""
+        if not shortcut or not content:
+            await send_bot_message(
+                chat_id=chat_id,
+                text=(
+                    "Usage : /canned_add raccourci Message\n"
+                    "Ex : /canned_add relance Hey bb, tu es là ?"
+                ),
+            )
+            return
+        await upsert_canned_response(pool, shortcut, content)
+        await send_bot_message(
+            chat_id=chat_id,
+            text=f"✅ Commande /{shortcut.lower()} enregistrée pour l'inbox.",
+        )
+        return
+
+    if command == "/canned_list":
+        items = await list_canned_responses(pool)
+        if not items:
+            await send_bot_message(chat_id=chat_id, text="Aucune commande inbox.")
+            return
+        lines = ["Commandes inbox :\n"]
+        for item in items:
+            preview = item.content.replace("\n", " ")[:60]
+            lines.append(f"/{item.shortcut} — {preview}")
+        await send_bot_message(chat_id=chat_id, text="\n".join(lines))
+        return
+
+    if command == "/canned_del":
+        if not args:
+            await send_bot_message(chat_id=chat_id, text="Usage : /canned_del raccourci")
+            return
+        deleted = await delete_canned_response(pool, args)
+        if deleted:
+            await send_bot_message(chat_id=chat_id, text=f"Commande /{args.lower()} supprimée.")
+        else:
+            await send_bot_message(chat_id=chat_id, text=f"Aucune commande /{args.lower()}.")
 
 
 @routes.post("/webhooks/business")

@@ -29,7 +29,14 @@ const chatActive = $("chat-active");
 const chatTitle = $("chat-title");
 const chatSubtitle = $("chat-subtitle");
 const chatAvatar = $("chat-avatar");
+let cannedCache = [];
+let suggestIndex = -1;
+let suggestMatches = [];
+
 const cannedBar = $("canned-bar");
+const cmdSuggest = $("cmd-suggest");
+const cmdHelpPanel = $("cmd-help-panel");
+const cmdHelpList = $("cmd-help-list");
 const replyForm = $("reply-form");
 const replyInput = $("reply-input");
 const searchInput = $("search-input");
@@ -289,41 +296,138 @@ function appendMessage(msg) {
   lastRenderedDirection = msg.direction;
 }
 
-/* ---------- Canned ---------- */
+/* ---------- Canned / commandes ---------- */
+
+function previewText(text, max = 72) {
+  const oneLine = String(text || "").replace(/\s+/g, " ").trim();
+  return oneLine.length > max ? oneLine.slice(0, max - 1) + "…" : oneLine;
+}
+
+function renderCannedUi() {
+  cannedBar.innerHTML = "";
+  cmdHelpList.innerHTML = "";
+
+  for (const item of cannedCache) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = `/${item.shortcut}`;
+    btn.title = item.content;
+    btn.addEventListener("click", () => sendShortcut(item.shortcut));
+    cannedBar.appendChild(btn);
+
+    const li = document.createElement("li");
+    li.innerHTML =
+      `<code>/${escapeHtml(item.shortcut)}</code>` +
+      `<span class="cmd-preview">${escapeHtml(previewText(item.content))}</span>`;
+    li.addEventListener("click", () => {
+      hideCmdHelp();
+      sendShortcut(item.shortcut);
+    });
+    cmdHelpList.appendChild(li);
+  }
+}
 
 async function loadCanned() {
   const res = await api("/api/inbox/canned");
   if (!res.ok) return;
   const data = await res.json();
-  cannedBar.innerHTML = "";
-  for (const item of data.items || []) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = `/${item.shortcut}`;
-    btn.title = item.content;
-    btn.addEventListener("click", () => {
-      replyInput.value = item.content;
-      autoGrow();
-      replyInput.focus();
+  cannedCache = data.items || [];
+  renderCannedUi();
+}
+
+function hideSuggest() {
+  cmdSuggest.classList.add("hidden");
+  cmdSuggest.innerHTML = "";
+  suggestIndex = -1;
+  suggestMatches = [];
+}
+
+function hideCmdHelp() {
+  cmdHelpPanel.classList.add("hidden");
+}
+
+function showCmdHelp() {
+  cmdHelpPanel.classList.toggle("hidden");
+}
+
+function matchingShortcuts(query) {
+  const q = query.toLowerCase();
+  return cannedCache.filter((item) => item.shortcut.startsWith(q));
+}
+
+function renderSuggest(matches) {
+  suggestMatches = matches.slice(0, 8);
+  cmdSuggest.innerHTML = "";
+  suggestIndex = -1;
+  if (!suggestMatches.length) {
+    hideSuggest();
+    return;
+  }
+  for (const item of suggestMatches) {
+    const row = document.createElement("div");
+    row.className = "cmd-suggest-item";
+    row.innerHTML =
+      `<code>/${escapeHtml(item.shortcut)}</code>` +
+      `<span>${escapeHtml(previewText(item.content, 56))}</span>`;
+    row.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      applyShortcut(item.shortcut);
     });
-    cannedBar.appendChild(btn);
+    cmdSuggest.appendChild(row);
+  }
+  cmdSuggest.classList.remove("hidden");
+}
+
+function applyShortcut(shortcut) {
+  replyInput.value = `/${shortcut} `;
+  hideSuggest();
+  autoGrow();
+  replyInput.focus();
+}
+
+function updateSuggest() {
+  const val = replyInput.value;
+  if (!val.startsWith("/") || val.includes("\n")) {
+    hideSuggest();
+    return;
+  }
+  const parts = val.trim().split(/\s+/);
+  if (parts.length > 1 && !val.endsWith(" ")) {
+    hideSuggest();
+    return;
+  }
+  const query = parts[0].slice(1);
+  if (!query && parts.length === 1) {
+    renderSuggest(cannedCache);
+    return;
+  }
+  if (parts.length === 1) {
+    renderSuggest(matchingShortcuts(query));
+  } else {
+    hideSuggest();
   }
 }
 
-/* ---------- Reply input ---------- */
-
-function autoGrow() {
-  replyInput.style.height = "auto";
-  replyInput.style.height = Math.min(replyInput.scrollHeight, 140) + "px";
+async function sendShortcut(shortcut) {
+  if (!activeConversationId) return;
+  await sendMessage(`/${shortcut}`);
 }
 
-async function sendReply() {
+async function sendMessage(content) {
   if (!activeConversationId) return;
-  const content = replyInput.value.trim();
-  if (!content) return;
+  const trimmed = content.trim();
+  if (!trimmed) return;
+
+  if (trimmed === "/help") {
+    showCmdHelp();
+    replyInput.value = "";
+    autoGrow();
+    return;
+  }
+
   const res = await api(`/api/inbox/conversations/${activeConversationId}/reply`, {
     method: "POST",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content: trimmed }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -331,9 +435,16 @@ async function sendReply() {
     return;
   }
   replyInput.value = "";
+  hideSuggest();
   autoGrow();
   await refreshMessages(true);
   await refreshConversations();
+}
+
+async function sendReply() {
+  const content = replyInput.value.trim();
+  if (!content) return;
+  await sendMessage(content);
 }
 
 /* ---------- Events ---------- */
@@ -380,17 +491,59 @@ searchInput.addEventListener("input", () => {
   renderConversations();
 });
 
+$("help-cmd-btn").addEventListener("click", showCmdHelp);
+$("cmd-help-close").addEventListener("click", hideCmdHelp);
+
 replyForm.addEventListener("submit", (e) => {
   e.preventDefault();
   sendReply();
 });
 
-replyInput.addEventListener("input", autoGrow);
+function autoGrow() {
+  replyInput.style.height = "auto";
+  replyInput.style.height = Math.min(replyInput.scrollHeight, 140) + "px";
+}
+
+replyInput.addEventListener("input", () => {
+  autoGrow();
+  updateSuggest();
+});
 replyInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
+  if (e.key === "Escape") {
+    hideSuggest();
+    hideCmdHelp();
+    return;
+  }
+  if (cmdSuggest.classList.contains("hidden")) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendReply();
+    }
+    return;
+  }
+  const items = cmdSuggest.querySelectorAll(".cmd-suggest-item");
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    suggestIndex = Math.min(suggestIndex + 1, items.length - 1);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    suggestIndex = Math.max(suggestIndex - 1, 0);
+  } else if (e.key === "Enter" && suggestIndex >= 0) {
+    e.preventDefault();
+    const shortcut = suggestMatches[suggestIndex]?.shortcut;
+    if (shortcut) applyShortcut(shortcut);
+    return;
+  } else if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendReply();
+    return;
+  } else {
+    return;
   }
+  items.forEach((el, i) => el.classList.toggle("active", i === suggestIndex));
+});
+replyInput.addEventListener("blur", () => {
+  setTimeout(hideSuggest, 150);
 });
 
 /* ---------- Bootstrap ---------- */

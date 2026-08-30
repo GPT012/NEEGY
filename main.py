@@ -69,6 +69,9 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="agent_add", description="Créer un accès chatteur inbox"),
     BotCommand(command="agents", description="Lister les chatteurs inbox"),
     BotCommand(command="agent_revoke", description="Révoquer un chatteur inbox"),
+    BotCommand(command="canned_add", description="Ajouter une commande inbox"),
+    BotCommand(command="canned_list", description="Lister les commandes inbox"),
+    BotCommand(command="canned_del", description="Supprimer une commande inbox"),
     *BOT_COMMANDS,
 ]
 

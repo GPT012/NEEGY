@@ -9,17 +9,20 @@ import asyncpg
 
 from config import config
 from db.inbox_repository import (
+    delete_canned_response,
     get_agent_by_token,
     get_chat_conversation,
     list_canned_responses,
     list_chat_conversations,
     list_chat_messages,
     record_outgoing_message,
+    upsert_canned_response,
     verify_chat_agent,
     ChatAgent,
 )
 from keyboards.main_menu import mini_app_deep_link
 from services.business_bot import BusinessBotError, send_business_reply
+from services.inbox_canned import CannedContext, expand_canned_content, resolve_outgoing_message
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -73,12 +76,12 @@ def _shop_link(request: web.Request) -> str:
     return "https://t.me/"
 
 
-def _expand_canned(content: str, request: web.Request) -> str:
-    return (
-        content.replace("{shop_link}", _shop_link(request))
-        .replace("{paypal_url}", config.paypal_url or "")
-        .replace("{bank_iban}", config.bank_iban or "")
-    )
+def _canned_context(request: web.Request, agent_name: str | None = None) -> CannedContext:
+    return CannedContext(shop_link=_shop_link(request), agent_name=agent_name)
+
+
+def _expand_canned(content: str, request: web.Request, agent_name: str | None = None) -> str:
+    return expand_canned_content(content, _canned_context(request, agent_name))
 
 
 @routes.post("/api/inbox/login")
@@ -171,6 +174,27 @@ async def inbox_reply(request: web.Request) -> web.Response:
     if len(content) > 4000:
         return _json({"error": "Message trop long"}, status=400)
 
+    resolved, resolve_error = await resolve_outgoing_message(
+        pool,
+        content,
+        _canned_context(request, agent.name),
+    )
+    if resolve_error == "help":
+        items = await list_canned_responses(pool)
+        shortcuts = [item.shortcut for item in items]
+        return _json(
+            {
+                "error": "Utilise /help dans l'interface pour voir les commandes.",
+                "shortcuts": shortcuts,
+            },
+            status=400,
+        )
+    if resolve_error:
+        return _json({"error": resolve_error}, status=400)
+    content = resolved or content
+    if len(content) > 4000:
+        return _json({"error": "Message trop long après expansion"}, status=400)
+
     conversation = await get_chat_conversation(pool, conversation_id)
     if conversation is None:
         return _json({"error": "Conversation introuvable"}, status=404)
@@ -209,7 +233,8 @@ async def inbox_canned(request: web.Request) -> web.Response:
             "items": [
                 {
                     "shortcut": item.shortcut,
-                    "content": _expand_canned(item.content, request),
+                    "content": _expand_canned(item.content, request, agent_name=None),
+                    "template": item.content,
                 }
                 for item in items
             ]

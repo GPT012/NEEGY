@@ -67,10 +67,25 @@
 
         <div id="messages" class="messages"></div>
 
-        <div id="canned-bar" class="canned-bar"></div>
+        <div class="canned-wrap">
+          <button id="help-cmd-btn" type="button" class="canned-help-btn" title="Liste des commandes">?</button>
+          <div id="canned-bar" class="canned-bar"></div>
+        </div>
+
+        <div id="cmd-help-panel" class="cmd-help-panel hidden">
+          <div class="cmd-help-head">
+            <strong>Commandes rapides</strong>
+            <button id="cmd-help-close" type="button" class="icon-btn" aria-label="Fermer">×</button>
+          </div>
+          <p class="muted small cmd-help-hint">Tape /raccourci puis Entrée, ou clique une pastille pour envoyer.</p>
+          <ul id="cmd-help-list" class="cmd-help-list"></ul>
+        </div>
 
         <form id="reply-form" class="reply-form">
-          <textarea id="reply-input" rows="1" placeholder="Écris ta réponse…"></textarea>
+          <div class="reply-wrap">
+            <div id="cmd-suggest" class="cmd-suggest hidden"></div>
+            <textarea id="reply-input" rows="1" placeholder="Message ou /commande (ex: /salut, /boutique)…"></textarea>
+          </div>
           <button id="send-btn" type="submit" class="send-btn" aria-label="Envoyer">
             <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2v7Z"/></svg>
           </button>
