@@ -316,3 +316,54 @@ CREATE TABLE IF NOT EXISTS drive_order_files (
 CREATE INDEX IF NOT EXISTS idx_drive_order_files_order
     ON drive_order_files (order_id);
 
+-- Inbox chatteurs (bot relais Telegram Business / Secretary Mode).
+CREATE TABLE IF NOT EXISTS chat_agents (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    token_hash  TEXT NOT NULL,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+    id                      SERIAL PRIMARY KEY,
+    telegram_user_id        BIGINT NOT NULL UNIQUE,
+    telegram_chat_id        BIGINT NOT NULL,
+    business_connection_id  TEXT NOT NULL DEFAULT '',
+    client_name             TEXT NOT NULL DEFAULT '',
+    client_username         TEXT,
+    status                  TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'resolved')),
+    last_message_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_last_message
+    ON chat_conversations (last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id               SERIAL PRIMARY KEY,
+    conversation_id  INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    direction        TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+    content          TEXT NOT NULL,
+    agent_id         INTEGER NULL REFERENCES chat_agents(id) ON DELETE SET NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation
+    ON chat_messages (conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS chat_canned_responses (
+    id          SERIAL PRIMARY KEY,
+    shortcut    TEXT NOT NULL UNIQUE,
+    content     TEXT NOT NULL,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+INSERT INTO chat_canned_responses (shortcut, content)
+VALUES
+    ('boutique', 'Voici la boutique pour commander : {shop_link}'),
+    ('paypal', 'Tu peux payer via PayPal : {paypal_url}'),
+    ('prix', 'Dis-moi ce qui t''intéresse et je t''envoie les tarifs 😊')
+ON CONFLICT (shortcut) DO NOTHING;
+

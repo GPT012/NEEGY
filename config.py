@@ -214,6 +214,13 @@ class Config:
 
     admin_user_id: int | None
 
+    # Inbox chatteurs (bot relais Secretary Mode → /inbox/ web).
+    inbox_enabled: bool
+    business_bot_token: str | None
+    business_webhook_secret: str | None
+    business_webhook_path: str
+    business_webhook_url: str | None
+
     # Chat/groupe Telegram où tu déposes photos & vidéos (style Drive).
     # Laisse vide pour n'utiliser que la commande /depot en privé avec le bot.
     stock_deposit_chat_id: int | None
@@ -279,6 +286,55 @@ def load_config() -> Config:
     admin_user_id_raw = _get_str("ADMIN_USER_ID")
     admin_user_id = _get_required_int("ADMIN_USER_ID") if admin_user_id_raw else None
 
+    inbox_enabled = _get_bool("INBOX_ENABLED", default=False)
+    business_bot_token = _get_str("BUSINESS_BOT_TOKEN")
+    business_webhook_secret = _get_str("BUSINESS_WEBHOOK_SECRET")
+    business_webhook_path = _get_str("BUSINESS_WEBHOOK_PATH", "/webhooks/business")
+
+    business_webhook_url: str | None = None
+    business_webhook_url_raw = _get_str("BUSINESS_WEBHOOK_URL")
+    if business_webhook_url_raw:
+        business_webhook_url = business_webhook_url_raw.rstrip("/")
+        _check_https_url(
+            "BUSINESS_WEBHOOK_URL",
+            business_webhook_url,
+            "https://mon-domaine/webhooks/business",
+        )
+    elif webhook_url and inbox_enabled:
+        base = webhook_url.rstrip("/")
+        if base.endswith(config_webhook_path := _get_str("WEBHOOK_PATH", "/webhook")):
+            root = base[: -len(config_webhook_path)]
+        else:
+            root = base.rsplit("/", 1)[0]
+        business_webhook_url = f"{root}{business_webhook_path}"
+
+    if inbox_enabled:
+        missing = [
+            name
+            for name, value in (
+                ("BUSINESS_BOT_TOKEN", business_bot_token),
+                ("BUSINESS_WEBHOOK_SECRET", business_webhook_secret),
+                ("DATABASE_URL", database_url),
+            )
+            if not value
+        ]
+        if missing:
+            raise ConfigError(
+                "INBOX_ENABLED=true exige : "
+                + ", ".join(missing)
+                + ". Voir .env.example."
+            )
+        if not use_webhook:
+            raise ConfigError(
+                "INBOX_ENABLED=true exige USE_WEBHOOK=true "
+                "(webhook bot relais + inbox web)."
+            )
+        if not business_webhook_url:
+            raise ConfigError(
+                "INBOX_ENABLED=true exige BUSINESS_WEBHOOK_URL ou WEBHOOK_URL "
+                "pour enregistrer le webhook du bot relais."
+            )
+
     deposit_chat_raw = _get_str("STOCK_DEPOSIT_CHAT_ID")
     stock_deposit_chat_id = (
         _get_required_int("STOCK_DEPOSIT_CHAT_ID") if deposit_chat_raw else None
@@ -309,6 +365,11 @@ def load_config() -> Config:
         mini_app_url=mini_app_url,
         mini_app_short_name=_get_str("MINI_APP_SHORT_NAME"),
         admin_user_id=admin_user_id,
+        inbox_enabled=inbox_enabled,
+        business_bot_token=business_bot_token,
+        business_webhook_secret=business_webhook_secret,
+        business_webhook_path=business_webhook_path,
+        business_webhook_url=business_webhook_url,
         stock_deposit_chat_id=stock_deposit_chat_id,
         google_drive_folder_id=google_drive_folder_id,
         google_service_account_info=google_service_account_info,

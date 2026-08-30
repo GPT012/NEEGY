@@ -27,17 +27,19 @@ from aiogram.types import BotCommand, BotCommandScopeChat, MenuButtonWebApp, Web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
-from api import webapp_routes
+from api import business_webhook, inbox_routes, webapp_routes
 from config import config
 from db.pool import close_pool, create_pool, describe_dsn
 from handlers import admin, commands, deposit, inline, menu
 from middlewares.throttling import ThrottlingMiddleware
+from services.business_bot import register_business_webhook
 from utils.logger import get_logger, setup_logging
 
 setup_logging(config.log_level, config.log_file_path)
 logger = get_logger(__name__)
 
 WEBAPP_DIR = Path(__file__).parent / "webapp"
+INBOX_DIR = WEBAPP_DIR / "inbox"
 
 BOT_COMMANDS = [
     BotCommand(command="start", description="Démarrer / afficher le menu"),
@@ -64,6 +66,9 @@ ADMIN_BOT_COMMANDS = [
     BotCommand(command="grants", description="Qui a reçu quel lot"),
     BotCommand(command="rewards", description="Alias de /grants"),
     BotCommand(command="fulfill", description="Relancer l'envoi d'un lot"),
+    BotCommand(command="agent_add", description="Créer un accès chatteur inbox"),
+    BotCommand(command="agents", description="Lister les chatteurs inbox"),
+    BotCommand(command="agent_revoke", description="Révoquer un chatteur inbox"),
     *BOT_COMMANDS,
 ]
 
@@ -158,6 +163,10 @@ async def _on_startup(bot: Bot) -> None:
     logger.info("Bouton menu (Mini App) configuré")
 
 
+async def handle_inbox_index(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(INBOX_DIR / "index.html")
+
+
 async def _on_app_startup(app: web.Application) -> None:
     """Initialise le pool PostgreSQL sans bloquer le démarrage en cas d'échec.
 
@@ -179,6 +188,20 @@ async def _on_app_startup(app: web.Application) -> None:
     # Propage le pool aux handlers aiogram (commandes admin), qui ne lisent
     # pas l'objet aiohttp `app` mais le workflow_data du dispatcher.
     app["dispatcher"]["db_pool"] = app["db_pool"]
+
+    if config.inbox_enabled and app.get("bot") is not None:
+        try:
+            me = await app["bot"].get_me()
+            app["shop_bot_username"] = me.username
+        except Exception:
+            logger.exception("Impossible de récupérer le username du bot boutique")
+            app["shop_bot_username"] = None
+        try:
+            await register_business_webhook()
+        except Exception:
+            logger.exception(
+                "Impossible d'enregistrer le webhook du bot relais — inbox indisponible"
+            )
 
 
 async def _on_app_cleanup(app: web.Application) -> None:
@@ -213,10 +236,14 @@ async def webhook_secret_middleware(request: web.Request, handler) -> web.Stream
     """
     if request.path == config.webhook_path:
         expected_token = config.webhook_secret_token or ""
-        received_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if not expected_token or not hmac.compare_digest(received_token, expected_token):
-            logger.warning("Webhook rejeté : secret token absent ou invalide")
-            return web.Response(status=403)
+    elif config.inbox_enabled and request.path == config.business_webhook_path:
+        expected_token = config.business_webhook_secret or ""
+    else:
+        return await handler(request)
+    received_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not expected_token or not hmac.compare_digest(received_token, expected_token):
+        logger.warning("Webhook rejeté : secret token absent ou invalide (%s)", request.path)
+        return web.Response(status=403)
     return await handler(request)
 
 
@@ -283,11 +310,16 @@ def run_webhook() -> None:
 
     app.router.add_get("/health", handle_health)
     app.add_routes(webapp_routes.routes)
+    app.add_routes(inbox_routes.routes)
+    app.add_routes(business_webhook.routes)
     # Route exacte sur "/webapp/" enregistrée avant add_static : voir
     # handle_webapp_index pour l'explication (index.html non servi par défaut).
     app.router.add_get("/webapp/", handle_webapp_index)
     app.router.add_get("/webapp", lambda request: web.HTTPFound("/webapp/"))
     app.router.add_static("/webapp/", path=WEBAPP_DIR, show_index=False)
+    app.router.add_get("/inbox/", handle_inbox_index)
+    app.router.add_get("/inbox", lambda request: web.HTTPFound("/inbox/"))
+    app.router.add_static("/inbox/", path=INBOX_DIR, show_index=False)
 
     webhook_handler = SimpleRequestHandler(
         dispatcher=dispatcher,
@@ -304,6 +336,11 @@ def run_webhook() -> None:
         config.webapp_port,
         config.webhook_path,
     )
+    if config.inbox_enabled:
+        logger.info(
+            "Inbox chatteurs activée (bot relais → %s, UI /inbox/)",
+            config.business_webhook_path,
+        )
     web.run_app(app, host=config.webapp_host, port=config.webapp_port)
 
 

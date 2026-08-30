@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NEEGY Inbox</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="login-screen" class="panel">
+    <h1>NEEGY Inbox</h1>
+    <p class="muted">Connexion chatteur</p>
+    <label>Prénom / identifiant</label>
+    <input id="login-name" type="text" autocomplete="username" />
+    <label>Token</label>
+    <input id="login-token" type="password" autocomplete="current-password" />
+    <button id="login-btn" type="button">Se connecter</button>
+    <p id="login-error" class="error hidden"></p>
+  </div>
+
+  <div id="app-screen" class="hidden">
+    <header class="topbar">
+      <div>
+        <strong>NEEGY Inbox</strong>
+        <span id="agent-label" class="muted"></span>
+      </div>
+      <button id="logout-btn" type="button" class="ghost">Déconnexion</button>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <h2>Conversations</h2>
+        <ul id="conversation-list"></ul>
+      </aside>
+      <main class="chat">
+        <div id="chat-empty" class="muted">Sélectionne une conversation</div>
+        <div id="chat-active" class="hidden">
+          <div class="chat-header">
+            <div>
+              <strong id="chat-title"></strong>
+              <div id="chat-subtitle" class="muted"></div>
+            </div>
+          </div>
+          <div id="canned-bar" class="canned-bar"></div>
+          <div id="messages" class="messages"></div>
+          <form id="reply-form" class="reply-form">
+            <textarea id="reply-input" rows="3" placeholder="Répondre à la cliente…"></textarea>
+            <button type="submit">Envoyer</button>
+          </form>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

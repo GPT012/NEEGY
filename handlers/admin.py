@@ -22,6 +22,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from config import config
+from db.inbox_repository import create_chat_agent, list_chat_agents, revoke_chat_agent
 from db.repository import (
     CartError,
     REWARD_POOL_LABELS,
@@ -1246,3 +1247,59 @@ async def handle_ship_callback(
         await _respond_admin_callback(callback, f"#{order_id} envoyée.", toast="Envoyée")
     else:
         await callback.answer("Déjà envoyée, ou pas encore payée.", show_alert=True)
+
+
+@router.message(Command("agent_add"))
+async def handle_agent_add(message: Message, command: CommandObject, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible.")
+        return
+    name = (command.args or "").strip()
+    if not name:
+        await message.answer("Usage : /agent_add Prénom\nExemple : /agent_add Sarah")
+        return
+    try:
+        agent, token = await create_chat_agent(db_pool, name)
+    except Exception:
+        logger.exception("Erreur /agent_add")
+        await message.answer(GENERIC_ERROR_MESSAGE)
+        return
+    await message.answer(
+        f"✅ Chatteur « {escape(agent.name)} » créé.\n\n"
+        f"Identifiant : {escape(agent.name)}\n"
+        f"Token (à copier une seule fois) :\n<code>{escape(token)}</code>\n\n"
+        "Connexion inbox : https://TON-DOMAINE/inbox/\n"
+        "Ne partage pas ce token publiquement."
+    )
+
+
+@router.message(Command("agents"))
+async def handle_agents(message: Message, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible.")
+        return
+    agents = await list_chat_agents(db_pool)
+    if not agents:
+        await message.answer("Aucun chatteur. Ajoute-en un avec /agent_add Prénom")
+        return
+    lines = ["Chatteurs inbox :\n"]
+    for agent in agents:
+        status = "actif" if agent.is_active else "révoqué"
+        lines.append(f"• {escape(agent.name)} — {status}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("agent_revoke"))
+async def handle_agent_revoke(message: Message, command: CommandObject, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible.")
+        return
+    name = (command.args or "").strip()
+    if not name:
+        await message.answer("Usage : /agent_revoke Prénom")
+        return
+    revoked = await revoke_chat_agent(db_pool, name)
+    if revoked:
+        await message.answer(f"🚫 Accès inbox révoqué pour « {escape(name)} ».")
+    else:
+        await message.answer(f"Aucun chatteur actif nommé « {escape(name)} ».")
