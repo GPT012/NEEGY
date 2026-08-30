@@ -47,6 +47,7 @@ async def register_business_webhook() -> None:
             "url": config.business_webhook_url,
             "secret_token": secret,
             "allowed_updates": [
+                "message",
                 "business_connection",
                 "business_message",
                 "edited_business_message",
@@ -54,6 +55,17 @@ async def register_business_webhook() -> None:
         },
     )
     logger.info("Webhook bot relais enregistré sur %s", config.business_webhook_url)
+
+
+async def send_bot_message(*, chat_id: int, text: str) -> None:
+    """Message direct au bot (ex. réponse à /start), sans business_connection_id."""
+    await _api(
+        "sendMessage",
+        {
+            "chat_id": chat_id,
+            "text": text,
+        },
+    )
 
 
 async def send_business_reply(

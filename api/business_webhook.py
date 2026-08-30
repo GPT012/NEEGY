@@ -7,9 +7,9 @@ from typing import Any
 
 from aiohttp import web
 
-from config import config
+from config import config, public_inbox_url
 from db.inbox_repository import record_incoming_business_message
-from services.business_bot import extract_message_content
+from services.business_bot import extract_message_content, send_bot_message
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -78,7 +78,26 @@ async def handle_business_webhook(request: web.Request) -> web.Response:
         return web.Response(status=400)
 
     try:
-        if "business_message" in update:
+        if "message" in update:
+            message = update["message"]
+            chat = message.get("chat") or {}
+            # Chat privé direct avec le bot (pas une cliente via ton compte Business).
+            if chat.get("type") == "private":
+                text = (message.get("text") or "").strip()
+                chat_id = chat.get("id")
+                if chat_id is not None and text.startswith("/start"):
+                    await send_bot_message(
+                        chat_id=int(chat_id),
+                        text=(
+                            "Bot relais NEEGY actif ✅\n\n"
+                            "Les clientes ne t'écrivent pas ici : elles envoient un message "
+                            "à ton compte Telegram perso/pro (Secretary Mode).\n"
+                            "Ces messages apparaissent dans l'inbox web :\n"
+                            f"{public_inbox_url()}\n\n"
+                            "Pour créer un accès chatteur : /agent_add Prénom sur le bot boutique NEEGY."
+                        ),
+                    )
+        elif "business_message" in update:
             await _handle_business_message(pool, update["business_message"])
         elif "edited_business_message" in update:
             await _handle_business_message(pool, update["edited_business_message"])

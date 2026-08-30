@@ -264,7 +264,13 @@ async def handle_health(request: web.Request) -> web.Response:
         except Exception:
             logger.exception("Healthcheck : la base de données ne répond pas")
 
-    return web.json_response({"status": "ok", "database": "ok" if database_ok else "indisponible"})
+    return web.json_response(
+        {
+            "status": "ok",
+            "database": "ok" if database_ok else "indisponible",
+            "inbox": "active" if config.inbox_enabled else "disabled",
+        }
+    )
 
 
 async def handle_webapp_index(request: web.Request) -> web.FileResponse:
