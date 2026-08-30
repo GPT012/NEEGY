@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import hmac
+from html import escape
 from typing import Any
 
 from aiohttp import web
 
 from config import config, public_inbox_url
-from db.inbox_repository import record_incoming_business_message
+from db.inbox_repository import (
+    create_chat_agent,
+    list_chat_agents,
+    record_incoming_business_message,
+    revoke_chat_agent,
+)
 from services.business_bot import extract_message_content, send_bot_message
 from utils.logger import get_logger
 
@@ -59,6 +65,108 @@ async def _handle_business_message(pool, message: dict[str, Any]) -> None:
     )
 
 
+def _relay_command_args(text: str) -> tuple[str, str]:
+    parts = text.strip().split(maxsplit=1)
+    command = parts[0].split("@", 1)[0].lower()
+    args = parts[1].strip() if len(parts) > 1 else ""
+    return command, args
+
+
+async def _handle_relay_private_message(
+    pool,
+    *,
+    message: dict[str, Any],
+    chat_id: int,
+) -> None:
+    text = (message.get("text") or "").strip()
+    if not text.startswith("/"):
+        return
+
+    user = message.get("from") or {}
+    user_id = user.get("id")
+    if config.admin_user_id is None or user_id != config.admin_user_id:
+        await send_bot_message(
+            chat_id=chat_id,
+            text="Commande réservée à l'administrateur NEEGY.",
+        )
+        return
+
+    command, args = _relay_command_args(text)
+
+    if command == "/start":
+        await send_bot_message(
+            chat_id=chat_id,
+            text=(
+                "Bot relais NEEGY actif ✅\n\n"
+                "Les clientes t'écrivent sur ton compte perso/pro (Secretary Mode).\n"
+                "Leurs messages apparaissent ici :\n"
+                f"{public_inbox_url()}\n\n"
+                "Gestion chatteurs (admin) :\n"
+                "/agent_add Prénom — créer un accès\n"
+                "/agents — lister\n"
+                "/agent_revoke Prénom — révoquer"
+            ),
+        )
+        return
+
+    if command == "/agent_add":
+        if not args:
+            await send_bot_message(
+                chat_id=chat_id,
+                text="Usage : /agent_add Prénom\nExemple : /agent_add TMS",
+            )
+            return
+        try:
+            agent, token = await create_chat_agent(pool, args)
+        except Exception:
+            logger.exception("Erreur /agent_add (bot relais)")
+            await send_bot_message(chat_id=chat_id, text="Erreur lors de la création du chatteur.")
+            return
+        await send_bot_message(
+            chat_id=chat_id,
+            text=(
+                f"✅ Chatteur « {escape(agent.name)} » créé.\n\n"
+                f"Identifiant : {escape(agent.name)}\n"
+                f"Token (à copier une seule fois) :\n<code>{escape(token)}</code>\n\n"
+                f"Connexion inbox : {public_inbox_url()}\n"
+                "Ne partage pas ce token publiquement."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    if command == "/agents":
+        agents = await list_chat_agents(pool)
+        if not agents:
+            await send_bot_message(
+                chat_id=chat_id,
+                text="Aucun chatteur. Ajoute-en un avec /agent_add Prénom",
+            )
+            return
+        lines = ["Chatteurs inbox :\n"]
+        for agent in agents:
+            status = "actif" if agent.is_active else "révoqué"
+            lines.append(f"• {agent.name} — {status}")
+        await send_bot_message(chat_id=chat_id, text="\n".join(lines))
+        return
+
+    if command == "/agent_revoke":
+        if not args:
+            await send_bot_message(
+                chat_id=chat_id,
+                text="Usage : /agent_revoke Prénom",
+            )
+            return
+        revoked = await revoke_chat_agent(pool, args)
+        if revoked:
+            await send_bot_message(chat_id=chat_id, text=f"Chatteur « {args} » révoqué.")
+        else:
+            await send_bot_message(
+                chat_id=chat_id,
+                text=f"Aucun chatteur actif « {args} ».",
+            )
+
+
 @routes.post("/webhooks/business")
 async def handle_business_webhook(request: web.Request) -> web.Response:
     if not config.inbox_enabled:
@@ -81,21 +189,13 @@ async def handle_business_webhook(request: web.Request) -> web.Response:
         if "message" in update:
             message = update["message"]
             chat = message.get("chat") or {}
-            # Chat privé direct avec le bot (pas une cliente via ton compte Business).
             if chat.get("type") == "private":
-                text = (message.get("text") or "").strip()
                 chat_id = chat.get("id")
-                if chat_id is not None and text.startswith("/start"):
-                    await send_bot_message(
+                if chat_id is not None:
+                    await _handle_relay_private_message(
+                        pool,
+                        message=message,
                         chat_id=int(chat_id),
-                        text=(
-                            "Bot relais NEEGY actif ✅\n\n"
-                            "Les clientes ne t'écrivent pas ici : elles envoient un message "
-                            "à ton compte Telegram perso/pro (Secretary Mode).\n"
-                            "Ces messages apparaissent dans l'inbox web :\n"
-                            f"{public_inbox_url()}\n\n"
-                            "Pour créer un accès chatteur : /agent_add Prénom sur le bot boutique NEEGY."
-                        ),
                     )
         elif "business_message" in update:
             await _handle_business_message(pool, update["business_message"])

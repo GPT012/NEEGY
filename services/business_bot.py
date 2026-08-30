@@ -57,15 +57,20 @@ async def register_business_webhook() -> None:
     logger.info("Webhook bot relais enregistré sur %s", config.business_webhook_url)
 
 
-async def send_bot_message(*, chat_id: int, text: str) -> None:
+async def send_bot_message(
+    *,
+    chat_id: int,
+    text: str,
+    parse_mode: str | None = None,
+) -> None:
     """Message direct au bot (ex. réponse à /start), sans business_connection_id."""
-    await _api(
-        "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": text,
-        },
-    )
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    await _api("sendMessage", payload)
 
 
 async def send_business_reply(
