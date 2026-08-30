@@ -15,6 +15,7 @@ class ChatAgent:
     id: int
     name: str
     is_active: bool
+    is_manager: bool
     created_at: datetime
 
 
@@ -29,6 +30,8 @@ class ChatConversation:
     status: str
     last_message_at: datetime
     last_preview: str | None = None
+    last_message_id: int | None = None
+    last_direction: str | None = None
 
 
 @dataclass(frozen=True)
@@ -55,26 +58,31 @@ def generate_agent_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-async def create_chat_agent(pool: asyncpg.Pool, name: str) -> tuple[ChatAgent, str]:
+async def create_chat_agent(
+    pool: asyncpg.Pool, name: str, *, is_manager: bool = False
+) -> tuple[ChatAgent, str]:
     token = generate_agent_token()
     token_hash = hash_agent_token(token)
     row = await pool.fetchrow(
         """
-        INSERT INTO chat_agents (name, token_hash)
-        VALUES ($1, $2)
+        INSERT INTO chat_agents (name, token_hash, is_manager)
+        VALUES ($1, $2, $3)
         ON CONFLICT (name) DO UPDATE
             SET token_hash = EXCLUDED.token_hash,
-                is_active = TRUE
-        RETURNING id, name, is_active, created_at
+                is_active = TRUE,
+                is_manager = chat_agents.is_manager OR EXCLUDED.is_manager
+        RETURNING id, name, is_active, is_manager, created_at
         """,
         name.strip(),
         token_hash,
+        is_manager,
     )
     assert row is not None
     agent = ChatAgent(
         id=int(row["id"]),
         name=row["name"],
         is_active=row["is_active"],
+        is_manager=row["is_manager"],
         created_at=row["created_at"],
     )
     return agent, token
@@ -94,7 +102,7 @@ async def revoke_chat_agent(pool: asyncpg.Pool, name: str) -> bool:
 async def list_chat_agents(pool: asyncpg.Pool) -> list[ChatAgent]:
     rows = await pool.fetch(
         """
-        SELECT id, name, is_active, created_at
+        SELECT id, name, is_active, is_manager, created_at
         FROM chat_agents
         ORDER BY name
         """
@@ -104,6 +112,7 @@ async def list_chat_agents(pool: asyncpg.Pool) -> list[ChatAgent]:
             id=int(row["id"]),
             name=row["name"],
             is_active=row["is_active"],
+            is_manager=row["is_manager"],
             created_at=row["created_at"],
         )
         for row in rows
@@ -114,7 +123,7 @@ async def verify_chat_agent(pool: asyncpg.Pool, name: str, token: str) -> ChatAg
     token_hash = hash_agent_token(token)
     row = await pool.fetchrow(
         """
-        SELECT id, name, is_active, created_at
+        SELECT id, name, is_active, is_manager, created_at
         FROM chat_agents
         WHERE lower(name) = lower($1) AND token_hash = $2 AND is_active = TRUE
         """,
@@ -127,6 +136,7 @@ async def verify_chat_agent(pool: asyncpg.Pool, name: str, token: str) -> ChatAg
         id=int(row["id"]),
         name=row["name"],
         is_active=row["is_active"],
+        is_manager=row["is_manager"],
         created_at=row["created_at"],
     )
 
@@ -135,7 +145,7 @@ async def get_agent_by_token(pool: asyncpg.Pool, token: str) -> ChatAgent | None
     token_hash = hash_agent_token(token)
     row = await pool.fetchrow(
         """
-        SELECT id, name, is_active, created_at
+        SELECT id, name, is_active, is_manager, created_at
         FROM chat_agents
         WHERE token_hash = $1 AND is_active = TRUE
         """,
@@ -147,8 +157,21 @@ async def get_agent_by_token(pool: asyncpg.Pool, token: str) -> ChatAgent | None
         id=int(row["id"]),
         name=row["name"],
         is_active=row["is_active"],
+        is_manager=row["is_manager"],
         created_at=row["created_at"],
     )
+
+
+async def set_agent_manager(pool: asyncpg.Pool, name: str, *, is_manager: bool = True) -> bool:
+    result = await pool.execute(
+        """
+        UPDATE chat_agents SET is_manager = $2
+        WHERE lower(name) = lower($1) AND is_active = TRUE
+        """,
+        name.strip(),
+        is_manager,
+    )
+    return result.endswith(" 1")
 
 
 async def record_business_event(
@@ -223,7 +246,19 @@ async def list_chat_conversations(
                 WHERE m.conversation_id = c.id
                 ORDER BY m.created_at DESC
                 LIMIT 1
-            ) AS last_preview
+            ) AS last_preview,
+            (
+                SELECT m.id FROM chat_messages m
+                WHERE m.conversation_id = c.id
+                ORDER BY m.created_at DESC
+                LIMIT 1
+            ) AS last_message_id,
+            (
+                SELECT m.direction FROM chat_messages m
+                WHERE m.conversation_id = c.id
+                ORDER BY m.created_at DESC
+                LIMIT 1
+            ) AS last_direction
         FROM chat_conversations c
         ORDER BY c.last_message_at DESC
         LIMIT $1
@@ -241,6 +276,8 @@ async def list_chat_conversations(
             status=row["status"],
             last_message_at=row["last_message_at"],
             last_preview=row["last_preview"],
+            last_message_id=int(row["last_message_id"]) if row["last_message_id"] else None,
+            last_direction=row["last_direction"],
         )
         for row in rows
     ]

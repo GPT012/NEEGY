@@ -28,6 +28,7 @@ from db.inbox_repository import (
     list_chat_agents,
     list_canned_responses,
     revoke_chat_agent,
+    set_agent_manager,
     upsert_canned_response,
 )
 from db.repository import (
@@ -1262,11 +1263,19 @@ async def handle_agent_add(message: Message, command: CommandObject, db_pool: as
         await message.answer("Base de données indisponible.")
         return
     name = (command.args or "").strip()
+    is_manager = False
+    if name.lower().endswith(" manager"):
+        name = name[: -len(" manager")].strip()
+        is_manager = True
     if not name:
-        await message.answer("Usage : /agent_add Prénom\nExemple : /agent_add Sarah")
+        await message.answer(
+            "Usage : /agent_add Prénom\n"
+            "Exemple : /agent_add Sarah\n"
+            "Manager (édite les commandes) : /agent_add Sarah manager"
+        )
         return
     try:
-        agent, token = await create_chat_agent(db_pool, name)
+        agent, token = await create_chat_agent(db_pool, name, is_manager=is_manager)
     except Exception:
         logger.exception("Erreur /agent_add")
         await message.answer(GENERIC_ERROR_MESSAGE)
@@ -1274,6 +1283,7 @@ async def handle_agent_add(message: Message, command: CommandObject, db_pool: as
     await message.answer(
         f"✅ Chatteur « {escape(agent.name)} » créé.\n\n"
         f"Identifiant : {escape(agent.name)}\n"
+        f"Rôle : {'manager' if agent.is_manager else 'chatteur'}\n"
         f"Token (à copier une seule fois) :\n<code>{escape(token)}</code>\n\n"
         f"Connexion inbox : {public_inbox_url()}\n"
         "Ne partage pas ce token publiquement."
@@ -1292,7 +1302,8 @@ async def handle_agents(message: Message, db_pool: asyncpg.Pool | None) -> None:
     lines = ["Chatteurs inbox :\n"]
     for agent in agents:
         status = "actif" if agent.is_active else "révoqué"
-        lines.append(f"• {escape(agent.name)} — {status}")
+        role = "manager" if agent.is_manager else "chatteur"
+        lines.append(f"• {escape(agent.name)} — {status} ({role})")
     await message.answer("\n".join(lines))
 
 
@@ -1379,3 +1390,22 @@ async def handle_canned_del(message: Message, command: CommandObject, db_pool: a
         await message.answer(f"🗑 Commande /{escape(shortcut.lower())} supprimée.")
     else:
         await message.answer(f"Aucune commande active /{escape(shortcut.lower())}.")
+
+
+@router.message(Command("agent_manager"))
+async def handle_agent_manager(message: Message, command: CommandObject, db_pool: asyncpg.Pool | None) -> None:
+    if db_pool is None:
+        await message.answer("Base de données indisponible.")
+        return
+    name = (command.args or "").strip()
+    if not name:
+        await message.answer("Usage : /agent_manager Prénom\nExemple : /agent_manager TMS")
+        return
+    updated = await set_agent_manager(db_pool, name, is_manager=True)
+    if updated:
+        await message.answer(
+            f"✅ « {escape(name)} » est maintenant manager inbox "
+            f"(peut modifier les commandes dans l'app)."
+        )
+    else:
+        await message.answer(f"Aucun chatteur actif nommé « {escape(name)} ».")

@@ -126,6 +126,151 @@ body {
   padding: 0.65rem 0.85rem;
   gap: 0.5rem;
 }
+.sidebar-actions { display: flex; align-items: center; gap: 0.15rem; }
+
+.notif-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: #243447;
+  font-size: 0.8rem;
+  color: #cfe0ef;
+}
+.notif-banner button {
+  flex: none;
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  background: var(--accent-solid);
+  color: #fff;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+#notif-btn.notif-on { color: var(--accent); }
+
+.conv-unread {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--accent-solid);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.conv-item.unread .conv-name { font-weight: 700; }
+
+/* ---------- Modal commandes ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+}
+.modal-card {
+  position: relative;
+  width: min(640px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--bg-sidebar);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-sidebar);
+  z-index: 1;
+}
+.modal-hint { padding: 0.65rem 1rem 0; margin: 0; }
+.cmd-editor-list { padding: 0.75rem 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.cmd-editor-item {
+  background: var(--bg-input);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+}
+.cmd-editor-item label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+.cmd-editor-item textarea {
+  width: 100%;
+  min-height: 72px;
+  border: none;
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  background: var(--bg-sidebar);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  resize: vertical;
+}
+.cmd-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+.cmd-editor-actions button {
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.cmd-editor-actions .save-btn { background: var(--accent-solid); color: #fff; }
+.cmd-editor-actions .del-btn { background: transparent; color: #ff6b6b; border: 1px solid #ff6b6b44; }
+.cmd-editor-add {
+  padding: 0 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  border-top: 1px solid var(--border);
+}
+.cmd-editor-add input,
+.cmd-editor-add textarea {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
+.cmd-editor-add button {
+  border: none;
+  border-radius: 8px;
+  padding: 0.65rem;
+  background: var(--accent-solid);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
 .agent-badge { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
 .agent-info { display: flex; flex-direction: column; min-width: 0; }
 .agent-info strong { font-size: 0.95rem; line-height: 1.1; }

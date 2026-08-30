@@ -11,6 +11,7 @@ from config import config
 from db.inbox_repository import (
     delete_canned_response,
     get_agent_by_token,
+    get_canned_by_shortcut,
     get_chat_conversation,
     list_canned_responses,
     list_chat_conversations,
@@ -67,6 +68,13 @@ async def _authenticate(request: web.Request) -> ChatAgent:
     return agent
 
 
+async def _authenticate_manager(request: web.Request) -> ChatAgent:
+    agent = await _authenticate(request)
+    if not agent.is_manager:
+        raise web.HTTPForbidden(text="Réservé aux managers inbox")
+    return agent
+
+
 def _shop_link(request: web.Request) -> str:
     bot_username = request.app.get("shop_bot_username")
     if bot_username:
@@ -101,7 +109,13 @@ async def inbox_login(request: web.Request) -> web.Response:
     if agent is None:
         return _json({"error": "Identifiants invalides"}, status=401)
 
-    return _json({"agent": {"id": agent.id, "name": agent.name}, "token": token})
+    return _json({"agent": {"id": agent.id, "name": agent.name, "is_manager": agent.is_manager}, "token": token})
+
+
+@routes.get("/api/inbox/me")
+async def inbox_me(request: web.Request) -> web.Response:
+    agent = await _authenticate(request)
+    return _json({"agent": {"id": agent.id, "name": agent.name, "is_manager": agent.is_manager}})
 
 
 @routes.get("/api/inbox/conversations")
@@ -118,6 +132,8 @@ async def inbox_conversations(request: web.Request) -> web.Response:
             "status": c.status,
             "last_message_at": c.last_message_at,
             "last_preview": c.last_preview,
+            "last_message_id": c.last_message_id,
+            "last_direction": c.last_direction,
         }
         for c in conversations
     ]
@@ -240,3 +256,51 @@ async def inbox_canned(request: web.Request) -> web.Response:
             ]
         }
     )
+
+
+@routes.post("/api/inbox/canned")
+async def inbox_canned_create(request: web.Request) -> web.Response:
+    await _authenticate_manager(request)
+    pool = _get_pool(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "JSON invalide"}, status=400)
+    shortcut = str(body.get("shortcut") or "").strip().lower()
+    content = str(body.get("content") or "").strip()
+    if not shortcut or not content:
+        return _json({"error": "Raccourci et contenu requis"}, status=400)
+    if not shortcut.isalnum() or len(shortcut) > 32:
+        return _json({"error": "Raccourci invalide (lettres/chiffres, max 32)"}, status=400)
+    await upsert_canned_response(pool, shortcut, content)
+    return _json({"ok": True, "shortcut": shortcut})
+
+
+@routes.put("/api/inbox/canned/{shortcut}")
+async def inbox_canned_update(request: web.Request) -> web.Response:
+    await _authenticate_manager(request)
+    pool = _get_pool(request)
+    shortcut = request.match_info["shortcut"].strip().lower()
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"error": "JSON invalide"}, status=400)
+    content = str(body.get("content") or "").strip()
+    if not content:
+        return _json({"error": "Contenu requis"}, status=400)
+    existing = await get_canned_by_shortcut(pool, shortcut)
+    if existing is None:
+        return _json({"error": "Commande introuvable"}, status=404)
+    await upsert_canned_response(pool, shortcut, content)
+    return _json({"ok": True})
+
+
+@routes.delete("/api/inbox/canned/{shortcut}")
+async def inbox_canned_delete(request: web.Request) -> web.Response:
+    await _authenticate_manager(request)
+    pool = _get_pool(request)
+    shortcut = request.match_info["shortcut"].strip().lower()
+    deleted = await delete_canned_response(pool, shortcut)
+    if not deleted:
+        return _json({"error": "Commande introuvable"}, status=404)
+    return _json({"ok": True})

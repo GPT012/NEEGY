@@ -16,6 +16,7 @@ from db.inbox_repository import (
     list_canned_responses,
     record_business_event,
     revoke_chat_agent,
+    set_agent_manager,
     upsert_canned_response,
 )
 from services.business_bot import extract_message_content, send_bot_message
@@ -124,22 +125,28 @@ async def _handle_relay_private_message(
         return
 
     if command == "/agent_add":
-        if not args:
+        name = args
+        is_manager = False
+        if name.lower().endswith(" manager"):
+            name = name[: -len(" manager")].strip()
+            is_manager = True
+        if not name:
             await send_bot_message(
                 chat_id=chat_id,
-                text="Usage : /agent_add Prénom\nExemple : /agent_add TMS",
+                text="Usage : /agent_add Prénom [manager]",
             )
             return
         try:
-            agent, token = await create_chat_agent(pool, args)
+            agent, token = await create_chat_agent(pool, name, is_manager=is_manager)
         except Exception:
             logger.exception("Erreur /agent_add (bot relais)")
             await send_bot_message(chat_id=chat_id, text="Erreur lors de la création du chatteur.")
             return
+        role = "manager" if agent.is_manager else "chatteur"
         await send_bot_message(
             chat_id=chat_id,
             text=(
-                f"✅ Chatteur « {escape(agent.name)} » créé.\n\n"
+                f"✅ Chatteur « {escape(agent.name)} » créé ({role}).\n\n"
                 f"Identifiant : {escape(agent.name)}\n"
                 f"Token (à copier une seule fois) :\n<code>{escape(token)}</code>\n\n"
                 f"Connexion inbox : {public_inbox_url()}\n"
@@ -160,8 +167,23 @@ async def _handle_relay_private_message(
         lines = ["Chatteurs inbox :\n"]
         for agent in agents:
             status = "actif" if agent.is_active else "révoqué"
-            lines.append(f"• {agent.name} — {status}")
+            role = "manager" if agent.is_manager else "chatteur"
+            lines.append(f"• {agent.name} — {status} ({role})")
         await send_bot_message(chat_id=chat_id, text="\n".join(lines))
+        return
+
+    if command == "/agent_manager":
+        if not args:
+            await send_bot_message(chat_id=chat_id, text="Usage : /agent_manager Prénom")
+            return
+        updated = await set_agent_manager(pool, args, is_manager=True)
+        if updated:
+            await send_bot_message(
+                chat_id=chat_id,
+                text=f"✅ {args} est manager inbox (édite les commandes dans l'app).",
+            )
+        else:
+            await send_bot_message(chat_id=chat_id, text=f"Aucun chatteur actif « {args} ».")
         return
 
     if command == "/agent_revoke":

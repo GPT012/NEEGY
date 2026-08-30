@@ -322,8 +322,12 @@ CREATE TABLE IF NOT EXISTS chat_agents (
     name        TEXT NOT NULL UNIQUE,
     token_hash  TEXT NOT NULL,
     is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    is_manager  BOOLEAN NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE chat_agents
+    ADD COLUMN IF NOT EXISTS is_manager BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id                      SERIAL PRIMARY KEY,

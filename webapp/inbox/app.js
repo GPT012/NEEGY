@@ -3,6 +3,7 @@ const STORAGE_NAME = "neegy_inbox_name";
 
 let authToken = localStorage.getItem(STORAGE_KEY) || "";
 let agentName = localStorage.getItem(STORAGE_NAME) || "";
+let isManager = false;
 let activeConversationId = null;
 let lastMessageId = 0;
 let pollTimer = null;
@@ -32,11 +33,19 @@ const chatAvatar = $("chat-avatar");
 let cannedCache = [];
 let suggestIndex = -1;
 let suggestMatches = [];
+let conversationsInitialized = false;
+let seenMessageByConv = {};
+let unreadByConv = {};
 
 const cannedBar = $("canned-bar");
 const cmdSuggest = $("cmd-suggest");
 const cmdHelpPanel = $("cmd-help-panel");
 const cmdHelpList = $("cmd-help-list");
+const manageCmdBtn = $("manage-cmd-btn");
+const cmdEditorModal = $("cmd-editor-modal");
+const cmdEditorList = $("cmd-editor-list");
+const notifBtn = $("notif-btn");
+const notifBanner = $("notif-banner");
 const replyForm = $("reply-form");
 const replyInput = $("reply-input");
 const searchInput = $("search-input");
@@ -137,6 +146,17 @@ function showApp() {
   appScreen.classList.remove("hidden");
   $("agent-name-label").textContent = agentName || "NEEGY";
   setAvatar($("agent-avatar"), agentName || "N", agentName || "N");
+  manageCmdBtn.classList.toggle("hidden", !isManager);
+  updateNotifUi();
+}
+
+async function loadMe() {
+  const res = await api("/api/inbox/me");
+  if (!res.ok) return;
+  const data = await res.json();
+  isManager = !!data.agent?.is_manager;
+  agentName = data.agent?.name || agentName;
+  manageCmdBtn.classList.toggle("hidden", !isManager);
 }
 
 function stopPolling() {
@@ -165,6 +185,7 @@ async function login(name, token) {
   if (!res.ok) throw new Error(data.error || "Connexion impossible");
   authToken = data.token;
   agentName = data.agent.name;
+  isManager = !!data.agent.is_manager;
   localStorage.setItem(STORAGE_KEY, authToken);
   localStorage.setItem(STORAGE_NAME, agentName);
 }
@@ -175,8 +196,96 @@ async function refreshConversations() {
   const res = await api("/api/inbox/conversations");
   if (res.status === 401) return showLogin();
   const data = await res.json();
+  processConversationUpdates(data.conversations || []);
   conversationsCache = data.conversations || [];
   renderConversations();
+}
+
+function processConversationUpdates(conversations) {
+  for (const conv of conversations) {
+    const msgId = conv.last_message_id;
+    if (!msgId) continue;
+    const seen = seenMessageByConv[conv.id] ?? 0;
+
+    if (!conversationsInitialized) {
+      seenMessageByConv[conv.id] = msgId;
+      continue;
+    }
+
+    if (msgId > seen && conv.last_direction === "in") {
+      seenMessageByConv[conv.id] = msgId;
+      if (conv.id !== activeConversationId) {
+        unreadByConv[conv.id] = (unreadByConv[conv.id] || 0) + 1;
+        notifyIncoming(conv, conv.last_preview);
+      }
+    } else if (msgId > seen) {
+      seenMessageByConv[conv.id] = msgId;
+    }
+  }
+  conversationsInitialized = true;
+  updateTitleBadge();
+}
+
+function markConversationRead(conv) {
+  if (!conv?.id) return;
+  unreadByConv[conv.id] = 0;
+  if (conv.last_message_id) seenMessageByConv[conv.id] = conv.last_message_id;
+  updateTitleBadge();
+}
+
+function totalUnread() {
+  return Object.values(unreadByConv).reduce((a, b) => a + b, 0);
+}
+
+function updateTitleBadge() {
+  const n = totalUnread();
+  document.title = n > 0 ? `(${n}) NEEGY Inbox` : "NEEGY Inbox";
+}
+
+function playNotifSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.value = 0.08;
+    osc.start();
+    osc.stop(ctx.currentTime + 0.12);
+  } catch (_) { /* ignore */ }
+}
+
+function notifyIncoming(conv, preview) {
+  const title = conv.client_name || "Nouveau message";
+  const body = preview || "Message reçu";
+  playNotifSound();
+  if (Notification.permission === "granted") {
+    const n = new Notification(title, { body, tag: `conv-${conv.id}` });
+    n.onclick = () => {
+      window.focus();
+      selectConversation(conv);
+      n.close();
+    };
+  }
+}
+
+async function ensureNotifPermission() {
+  if (!("Notification" in window)) return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  const result = await Notification.requestPermission();
+  return result === "granted";
+}
+
+function updateNotifUi() {
+  const granted = "Notification" in window && Notification.permission === "granted";
+  notifBtn.classList.toggle("notif-on", granted);
+  notifBtn.title = granted ? "Notifications activées" : "Activer les notifications";
+  notifBanner.classList.toggle(
+    "hidden",
+    granted || !("Notification" in window) || Notification.permission === "denied"
+  );
 }
 
 function renderConversations() {
@@ -202,6 +311,7 @@ function renderConversations() {
     const body = document.createElement("div");
     body.className = "conv-body";
     const username = conv.client_username ? `@${conv.client_username}` : `#${conv.telegram_user_id}`;
+    const unread = unreadByConv[conv.id] || 0;
     body.innerHTML = `
       <div class="conv-top">
         <span class="conv-name">${escapeHtml(conv.client_name || username)}</span>
@@ -212,6 +322,13 @@ function renderConversations() {
 
     li.appendChild(av);
     li.appendChild(body);
+    if (unread > 0) {
+      li.classList.add("unread");
+      const badge = document.createElement("span");
+      badge.className = "conv-unread";
+      badge.textContent = unread > 9 ? "9+" : String(unread);
+      li.appendChild(badge);
+    }
     li.addEventListener("click", () => selectConversation(conv));
     conversationList.appendChild(li);
   }
@@ -231,6 +348,7 @@ async function selectConversation(conv) {
   chatSubtitle.textContent = username;
   setAvatar(chatAvatar, conv.client_name, conv.telegram_user_id);
 
+  markConversationRead(conv);
   messagesEl.innerHTML = "";
   renderConversations();
   await refreshMessages(true);
@@ -255,6 +373,9 @@ async function refreshMessages(scroll) {
   for (const msg of msgs) {
     appendMessage(msg);
     lastMessageId = Math.max(lastMessageId, msg.id);
+  }
+  if (activeConversationId && lastMessageId) {
+    seenMessageByConv[activeConversationId] = lastMessageId;
   }
   if (scroll || nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
@@ -333,6 +454,77 @@ async function loadCanned() {
   const data = await res.json();
   cannedCache = data.items || [];
   renderCannedUi();
+  if (!cmdEditorModal.classList.contains("hidden")) renderCmdEditor();
+}
+
+/* ---------- Éditeur commandes (manager) ---------- */
+
+function openCmdEditor() {
+  renderCmdEditor();
+  cmdEditorModal.classList.remove("hidden");
+}
+
+function closeCmdEditor() {
+  cmdEditorModal.classList.add("hidden");
+}
+
+function renderCmdEditor() {
+  cmdEditorList.innerHTML = "";
+  for (const item of cannedCache) {
+    const wrap = document.createElement("div");
+    wrap.className = "cmd-editor-item";
+    wrap.innerHTML = `<label>/${escapeHtml(item.shortcut)}</label>`;
+    const ta = document.createElement("textarea");
+    ta.value = item.template || item.content;
+    wrap.appendChild(ta);
+    const actions = document.createElement("div");
+    actions.className = "cmd-editor-actions";
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "save-btn";
+    saveBtn.textContent = "Enregistrer";
+    saveBtn.addEventListener("click", async () => {
+      const res = await api(`/api/inbox/canned/${encodeURIComponent(item.shortcut)}`, {
+        method: "PUT",
+        body: JSON.stringify({ content: ta.value.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || "Erreur");
+      await loadCanned();
+    });
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "del-btn";
+    delBtn.textContent = "Supprimer";
+    delBtn.addEventListener("click", async () => {
+      if (!confirm(`Supprimer /${item.shortcut} ?`)) return;
+      const res = await api(`/api/inbox/canned/${encodeURIComponent(item.shortcut)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || "Erreur");
+      await loadCanned();
+    });
+    actions.appendChild(saveBtn);
+    actions.appendChild(delBtn);
+    wrap.appendChild(actions);
+    cmdEditorList.appendChild(wrap);
+  }
+}
+
+async function addNewCommand() {
+  const shortcut = $("cmd-new-shortcut").value.trim().toLowerCase();
+  const content = $("cmd-new-content").value.trim();
+  if (!shortcut || !content) return alert("Raccourci et message requis");
+  const res = await api("/api/inbox/canned", {
+    method: "POST",
+    body: JSON.stringify({ shortcut, content }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return alert(data.error || "Erreur");
+  $("cmd-new-shortcut").value = "";
+  $("cmd-new-content").value = "";
+  await loadCanned();
 }
 
 function hideSuggest() {
@@ -456,6 +648,9 @@ $("login-btn").addEventListener("click", async () => {
   try {
     await login(name, token);
     showApp();
+    await ensureNotifPermission();
+    updateNotifUi();
+    await loadMe();
     await loadCanned();
     await refreshConversations();
     startPolling();
@@ -493,6 +688,19 @@ searchInput.addEventListener("input", () => {
 
 $("help-cmd-btn").addEventListener("click", showCmdHelp);
 $("cmd-help-close").addEventListener("click", hideCmdHelp);
+manageCmdBtn.addEventListener("click", openCmdEditor);
+$("cmd-add-btn").addEventListener("click", addNewCommand);
+document.querySelectorAll("[data-close='cmd-editor-modal']").forEach((el) => {
+  el.addEventListener("click", closeCmdEditor);
+});
+notifBtn.addEventListener("click", async () => {
+  await ensureNotifPermission();
+  updateNotifUi();
+});
+$("notif-enable-btn").addEventListener("click", async () => {
+  await ensureNotifPermission();
+  updateNotifUi();
+});
 
 replyForm.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -551,6 +759,8 @@ replyInput.addEventListener("blur", () => {
 (async function bootstrap() {
   if (authToken && agentName) {
     showApp();
+    await loadMe();
+    updateNotifUi();
     await loadCanned();
     await refreshConversations();
     startPolling();
