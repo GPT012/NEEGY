@@ -2,53 +2,81 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>NEEGY Inbox</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="login-screen" class="panel">
-    <h1>NEEGY Inbox</h1>
-    <p class="muted">Connexion chatteur</p>
-    <label>Prénom / identifiant</label>
-    <input id="login-name" type="text" autocomplete="username" />
-    <label>Token</label>
-    <input id="login-token" type="password" autocomplete="current-password" />
-    <button id="login-btn" type="button">Se connecter</button>
-    <p id="login-error" class="error hidden"></p>
+  <!-- Écran de connexion -->
+  <div id="login-screen" class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">N</div>
+      <h1>NEEGY Inbox</h1>
+      <p class="muted">Espace chatteur</p>
+      <label for="login-name">Prénom / identifiant</label>
+      <input id="login-name" type="text" autocomplete="username" placeholder="Ex : Sarah" />
+      <label for="login-token">Token</label>
+      <input id="login-token" type="password" autocomplete="current-password" placeholder="Colle ton token" />
+      <button id="login-btn" type="button">Se connecter</button>
+      <p id="login-error" class="error hidden"></p>
+    </div>
   </div>
 
-  <div id="app-screen" class="hidden">
-    <header class="topbar">
-      <div>
-        <strong>NEEGY Inbox</strong>
-        <span id="agent-label" class="muted"></span>
-      </div>
-      <button id="logout-btn" type="button" class="ghost">Déconnexion</button>
-    </header>
-    <div class="layout">
-      <aside class="sidebar">
-        <h2>Conversations</h2>
-        <ul id="conversation-list"></ul>
-      </aside>
-      <main class="chat">
-        <div id="chat-empty" class="muted">Sélectionne une conversation</div>
-        <div id="chat-active" class="hidden">
-          <div class="chat-header">
-            <div>
-              <strong id="chat-title"></strong>
-              <div id="chat-subtitle" class="muted"></div>
-            </div>
+  <!-- Application -->
+  <div id="app-screen" class="app hidden">
+    <!-- Colonne conversations -->
+    <aside id="sidebar" class="sidebar">
+      <header class="sidebar-head">
+        <div class="agent-badge">
+          <span id="agent-avatar" class="avatar">?</span>
+          <div class="agent-info">
+            <strong id="agent-name-label">NEEGY</strong>
+            <span class="muted small">Chatteur connecté</span>
           </div>
-          <div id="canned-bar" class="canned-bar"></div>
-          <div id="messages" class="messages"></div>
-          <form id="reply-form" class="reply-form">
-            <textarea id="reply-input" rows="3" placeholder="Répondre à la cliente…"></textarea>
-            <button type="submit">Envoyer</button>
-          </form>
         </div>
-      </main>
-    </div>
+        <button id="logout-btn" type="button" class="icon-btn" title="Déconnexion" aria-label="Déconnexion">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M16 17v-3H9v-4h7V7l5 5-5 5M14 2a2 2 0 0 1 2 2v2h-2V4H5v16h9v-2h2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9Z"/></svg>
+        </button>
+      </header>
+      <div class="search-bar">
+        <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        <input id="search-input" type="text" placeholder="Rechercher une conversation" />
+      </div>
+      <ul id="conversation-list" class="conv-list"></ul>
+      <div id="conv-empty" class="conv-empty muted hidden">Aucune conversation pour l'instant.</div>
+    </aside>
+
+    <!-- Zone de discussion -->
+    <main class="chat">
+      <div id="chat-empty" class="chat-empty">
+        <div class="chat-empty-icon">💬</div>
+        <p>Sélectionne une conversation pour voir l'historique et relancer.</p>
+      </div>
+
+      <div id="chat-active" class="chat-active hidden">
+        <header class="chat-head">
+          <button id="back-btn" class="icon-btn back-btn" type="button" aria-label="Retour">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z"/></svg>
+          </button>
+          <span id="chat-avatar" class="avatar">?</span>
+          <div class="chat-head-info">
+            <strong id="chat-title"></strong>
+            <span id="chat-subtitle" class="muted small"></span>
+          </div>
+        </header>
+
+        <div id="messages" class="messages"></div>
+
+        <div id="canned-bar" class="canned-bar"></div>
+
+        <form id="reply-form" class="reply-form">
+          <textarea id="reply-input" rows="1" placeholder="Écris ta réponse…"></textarea>
+          <button id="send-btn" type="submit" class="send-btn" aria-label="Envoyer">
+            <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2v7Z"/></svg>
+          </button>
+        </form>
+      </div>
+    </main>
   </div>
 
   <script src="app.js"></script>
